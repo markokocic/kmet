@@ -1,26 +1,29 @@
 (ns kmet.app.ui.resource-config
   "The `kmet config` resource-configuration screen (pi:
-   modes/interactive/components/config-selector.ts — the package-resource
-   part; kmet has no top-level settings resource entries, so only
-   package-origin groups are listed, see alignment.md).
+   modes/interactive/components/config-selector.ts — packages first, then
+   top-level groups, pi buildGroups over the unified resolution).
 
    Layout (pi parity): top spacer, top border, spacer, two header lines
    (title · action hints, scope hint), spacer, the search input line, a
    blank line, then group rows, subgroup rows and resource rows, bottom
    spacer and bottom border. Space/enter toggles the selected resource,
    Tab switches the global/project write scope, escape closes, ctrl+c
-   exits. In project scope every row cycles inherit/load/unload — the
-   writes are +pattern/−pattern entries in the project settings :packages
-   entry, and an inherited user resource gets a fresh :autoload false
-   delta entry when the project has none (pi setProjectPackageOverride);
-   inherited rows are dimmed and carry their override suffix. The search
-   input filters by resource name, type and path.
+   exits. In project scope every row cycles inherit/load/unload — package
+   rows write +pattern/−pattern entries in the project settings :packages
+   entry, and an inherited user package gets a fresh :autoload false delta
+   entry when the project has none (pi setProjectPackageOverride).
+   Top-level rows write the project settings resource array instead (pi
+   setProjectTopLevelOverride). Inherited rows are dimmed and carry their
+   override suffix. The search input filters by resource name, type and
+   path.
 
-   Only package-origin resources are listed. The screen re-reads the
-   settings files after every toggle, so what it shows always matches what
-   the loaders will do on the next start/reload. Single-extension packages
-   (a file source or an extension.edn directory) ignore per-type filters,
-   so those rows are marked “always loaded” and cannot be toggled."
+   Package and top-level groups are both listed (pi parity). The screen
+   re-reads the settings files after every toggle, so what it shows always
+   matches what the loaders will do on the next start/reload.
+   Single-extension packages (a file source or an extension.edn directory)
+   ignore per-type filters, so those rows are marked “always loaded” and
+   cannot be toggled; top-level settings entries and auto-dir items toggle
+   via the scope's settings resource array instead of a package entry."
   (:require [clojure.string :as str]
             [babashka.fs :as fs]
             [kmet.app.keybindings :as app-kb]
@@ -62,22 +65,48 @@
 
       :else (or file path))))
 
+(defn- group-label
+  "pi getGroupLabel — package groups name their source + scope; top-level
+   settings-entry groups name their scope (User/Project settings); auto-dir
+   groups name the scope + base dir (User/∼... or Project/.kmet/...)."
+  [origin scope source base-dir agent-dir]
+  (if (= origin :package)
+    (str source " (" (name scope) ")")
+    (if (not= source "auto")
+      (if (= scope :user) "User settings" "Project settings")
+      (let [home (System/getProperty "user.home")
+            disp (fn [d]
+                   (let [s (str d)]
+                     (if (and home (str/starts-with? s home))
+                       (str "~" (subs s (count home)))
+                       s)))]
+        (if (= scope :user)
+          (str "User (" (disp (or base-dir agent-dir)) "/)")
+          (str "Project (" (disp (or base-dir ".kmet")) "/)"))))))
+
 (defn- build-groups
-  "pi buildGroups — resolved PackageItems grouped per package (metadata
-   scope + source) with per-type subgroups; user scope before project,
-   sources sorted, items sorted by display name."
-  [items-by-type]
+  "pi buildGroups — resolved items grouped per origin/scope/source/base-dir
+   with per-type subgroups; packages first, then top-level; user scope
+   before project; items sorted by display name."
+  [items-by-type agent-dir]
   (let [all (mapcat items-by-type (keys items-by-type))
         by-group (group-by (fn [item]
-                             {:scope (get-in item [:metadata :scope])
-                              :source (get-in item [:metadata :source])})
+                             {:origin (get-in item [:metadata :origin] :package)
+                              :scope (get-in item [:metadata :scope])
+                              :source (get-in item [:metadata :source])
+                              :base-dir (get-in item [:metadata :base-dir])})
                            all)]
     (vec
      (for [[gk group-items] (sort-by (fn [[gk _]]
-                                       [(if (= :user (:scope gk)) 0 1) (:source gk)])
+                                       [(if (= :package (:origin gk)) 0 1)
+                                        (if (= :user (:scope gk)) 0 1)
+                                        (str (:source gk))
+                                        (str (:base-dir gk))])
                                      by-group)]
        {:scope (:scope gk)
-        :label (str (:source gk) " (" (name (:scope gk)) ")")
+        :origin (:origin gk)
+        :label (group-label (:origin gk) (:scope gk) (:source gk)
+                            (:base-dir gk) agent-dir)
         :subgroups (vec
                     (for [type (sort-by type-order
                                         (distinct (map :resource-type group-items)))]
@@ -215,18 +244,32 @@
 ;; ─── Screen state ─────────────────────────────────────────────────────────
 
 (defn- read-views
-  "Resolve both package views from the settings files on disk:
-   {:user user-only-resolution :project merged-resolution}."
+  "Resolve both unified views from the settings files on disk:
+   {:user user-only-resolution :project merged-resolution}. The user view
+   is pi's global config view (untrusted settings manager): the project
+   scope — settings and auto dirs — is absent, not just the project
+   entries."
   []
   (let [user-settings (cfg/read-global-settings-map)
         project-settings (cfg/read-project-settings-map)]
-    {:user (pkgs/resolve-package-items user-settings nil)
+    {:user (pkgs/resolve-package-items user-settings nil nil false)
      :project (pkgs/resolve-package-items user-settings project-settings)}))
+
+(defn- override-state-of
+  "pi getProjectOverrideState — ITEM's project override state from the live
+   project settings: the resource-array branch for top-level items, the
+   package-entry branch otherwise."
+  [item]
+  (if (pkgs/top-level-item? item)
+    (pkgs/top-level-override-state-of item)
+    (pkgs/override-state-of item (pkgs/project-packages))))
 
 (defn- item-state-of
   "The per-row state of ITEM in the current WRITE-SCOPE (pi reads the
    settings live at render time): the project override state, the inherited
-   (global) enabled flag and the effective enabled flag."
+   (global) enabled flag and the effective enabled flag. The override
+   state is :inherit outside project scope (pi getProjectOverrideState
+   short-circuits), so the global view never reads the project entry."
   [item write-scope views inherited-keys]
   (let [scope (get-in item [:metadata :scope])
         key (pkgs/item-key item)
@@ -236,7 +279,9 @@
                             true)]
     {:inherited? inherited?
      :inherited-enabled inherited-enabled
-     :override-state (pkgs/override-state-of item (pkgs/project-packages))
+     :override-state (if (= write-scope :project)
+                       (override-state-of item)
+                       :inherit)
      :enabled (item-enabled-of item write-scope views)}))
 
 (defn- rebuild-layout!
@@ -249,7 +294,7 @@
   (let [st @(:state-atom this)
         views (read-views)
         write-scope (:write-scope st)
-        groups (build-groups (view-of views write-scope))
+        groups (build-groups (view-of views write-scope) (cfg/get-agent-dir))
         {:keys [rows]} (build-flat groups (:query st))
         inherited-keys (into #{}
                              (map pkgs/item-key)
@@ -342,9 +387,11 @@
                st)))))
 
 (defn- toggle-selected!
-  "Space/enter on an item row: global scope flips the enabled state (pi
-   toggleResource global branch); project scope cycles inherit/load/unload
-   (pi getNextOverrideState + setProjectPackageOverride). The row's state
+  "Space/enter on an item row (pi toggleResource): global scope flips the
+   enabled state (package items write the package entry, top-level items
+   the scope's settings resource array); project scope cycles
+   inherit/load/unload (pi getNextOverrideState + setProjectResourceOverride
+   — the package or the top-level branch per origin). The row's state
    updates in place (pi updateItem) — the layout is not re-resolved.
    Single-extension package rows cannot be toggled (their filters are
    ignored at resolve time)."
@@ -356,6 +403,8 @@
       (let [item (:item row)]
         (when-not (pkgs/single-extension-item? item)
           (if (= :global (:write-scope st))
+            ;; pi: global scope toggles user-scope items only (project rows
+            ;; toggle from the project scope view)
             (when (= :user (get-in item [:metadata :scope]))
               (let [enabled (not (:enabled row))]
                 (pkgs/apply-global-toggle! item enabled)
@@ -430,7 +479,9 @@
                         width "")
             scope-hint (th/fg t :muted
                               (if (= write-scope :global)
-                                "~/.kmet/agent/settings.edn"
+                                ;; pi: ~/.pi/agent/settings.json — the actual
+                                ;; agent-dir path (KMET_CODING_AGENT_DIR-aware)
+                                (cfg/global-settings-path)
                                 (str ".kmet/settings.edn"
                                      (when (:project-mode? this)
                                        " · inherited global resources are dimmed"))))

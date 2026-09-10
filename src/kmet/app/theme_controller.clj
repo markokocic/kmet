@@ -3,7 +3,9 @@
    detection, auto light/dark sync via color-scheme notifications, and
    theme switching. Every applied change re-themes the app components
    (via the on-changed callback) and invalidates the TUI."
-  (:require [clojure.string :as str]
+  (:require [babashka.fs :as fs]
+            [clojure.string :as str]
+            [kmet.config :as cfg]
             [kmet.tui.core :as tui]
             [kmet.tui.theme :as theme]))
 
@@ -83,7 +85,8 @@
    terminal theme; the custom-themes dir is registered for the file watcher;
    a terminal color-scheme listener drives auto light/dark sync."
   [ui config show-error on-changed]
-  (let [terminal-theme (:theme (theme/detect-terminal-background-from-env))
+  (let [agent-dir (cfg/get-agent-dir)
+        terminal-theme (:theme (theme/detect-terminal-background-from-env))
         active (theme/resolve-theme-setting (:theme config) terminal-theme)
         ctrl (map->ThemeController
               {:ui ui
@@ -93,7 +96,7 @@
                :terminal-theme-atom (atom terminal-theme)
                :active-theme-name-atom (atom active)
                :auto-sync-enabled-atom (atom false)})]
-    (theme/set-custom-themes-dir! (:themes-dir config))
+    (theme/set-custom-themes-dir! (str (fs/path agent-dir "themes")))
     (theme/init-theme! active true)
     ;; pi: onThemeChange — the theme file watcher's reloads notify through
     ;; this callback so the UI re-themes on live file edits too
@@ -129,10 +132,10 @@
 (defn set-config!
   "Update the controller's config (pi reads settings live; kmet caches the
    config, so /reload must push the new one). Also refreshes the watcher
-   dir in case :themes-dir changed."
+   dir for the current agent dir."
   [ctrl config]
   (reset! (:config-atom ctrl) config)
-  (theme/set-custom-themes-dir! (:themes-dir config)))
+  (theme/set-custom-themes-dir! (str (fs/path (cfg/get-agent-dir) "themes"))))
 
 (defn set-theme-name!
   "pi: setThemeName — switch to a named theme, disabling auto-sync.

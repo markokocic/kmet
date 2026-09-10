@@ -1042,6 +1042,10 @@
 (defn init
   "Extension init (required by the loader)."
   [api]
+  ;; the host agent dir (KMET_CODING_AGENT_DIR-aware) holds mcp.edn,
+  ;; mcp-cache.edn and mcp-oauth.edn — set before any path is read
+  (when-let [dir (ext/get-agent-dir api)]
+    (config/set-agent-dir! dir))
   (let [config (config/load-config)
         _ (config/ensure-global-template!)
         state (init-state api config)]

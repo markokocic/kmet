@@ -225,8 +225,11 @@
   "User-level provider catalog cache, written by `kmet --generate-models`
    (the same pipeline as `bb generate-models`). load-catalogs! prefers it
    over the bundled catalogs when it is strictly newer (fresh-model-cache).
-   Bindable for tests."
-  (str (fs/path (fs/home) ".kmet" "agent" "models-cache")))
+   Bindable for tests; nil (the default) resolves via
+   default-models-cache-dir — ~/.kmet/agent/models-cache, or AGENT-DIR/
+   models-cache when load-catalogs! pins a scope dir (KMET_CODING_AGENT_DIR
+   sandboxing)."
+  nil)
 
 (def ^:dynamic *use-models-cache*
   "When false, load-catalogs! ignores *models-cache-dir* even when fresh.
@@ -334,20 +337,32 @@
       (try (:generated-at (edn/read-string (slurp f)))
            (catch Exception _ nil)))))
 
+(defn default-models-cache-dir
+  "The default user-level model catalog cache dir (<agent-dir>/models-cache).
+   `kmet --generate-models` writes it; load-catalogs! reads it. AGENT-DIR
+   pins the scope dir (KMET_CODING_AGENT_DIR sandboxing); nil resolves via
+   cfg/get-agent-dir."
+  ([] (default-models-cache-dir nil))
+  ([agent-dir] (str (fs/path (or agent-dir (cfg/get-agent-dir)) "models-cache"))))
+
 (defn fresh-model-cache
-  "*models-cache-dir when usable: it must hold a complete generation (a
-   manifest.edn with a :generated-at timestamp) strictly newer than the
-   bundled catalogs' — so an upgrade that ships newer model data wins over a
-   stale cache until `kmet --generate-models` refreshes it (pi
-   remote-catalog semantics: the persisted overlay applies only over older
-   locally generated data). nil otherwise."
-  []
-  (when *use-models-cache*
-    (let [cache-gen (dir-generation *models-cache-dir*)]
-      (when cache-gen
-        (when-let [bundled (catalog-generation)]
-          (when (pos? (compare cache-gen bundled))
-            *models-cache-dir*))))))
+  "*models-cache-dir (defaulting to the agent-dir cache) when usable: it
+   must hold a complete generation (a manifest.edn with a :generated-at
+   timestamp) strictly newer than the bundled catalogs' — so an upgrade
+   that ships newer model data wins over a stale cache until
+   `kmet --generate-models` refreshes it (pi remote-catalog semantics: the
+   persisted overlay applies only over older locally generated data).
+   AGENT-DIR pins the default's scope dir (KMET_CODING_AGENT_DIR
+   sandboxing); nil resolves via cfg/get-agent-dir. nil otherwise."
+  ([] (fresh-model-cache nil))
+  ([agent-dir]
+   (when *use-models-cache*
+     (let [dir (or *models-cache-dir* (default-models-cache-dir agent-dir))
+           cache-gen (dir-generation dir)]
+       (when cache-gen
+         (when-let [bundled (catalog-generation)]
+           (when (pos? (compare cache-gen bundled))
+             dir)))))))
 
 (defn- load-dir-providers
   "Provider map from catalog EDN files directly under DIR (throws on an
@@ -391,29 +406,32 @@
    mutates its builtins map) and installs the auth config-key source
    (models.edn / extension :api-key), so auth resolution reflects composed
    providers. Returns the providers map. Call once at startup (pi registers
-   its generated providers at creation)."
-  []
-  (auth/set-config-key-source! (fn [provider-id] (:api-key (get-provider provider-id))))
-  (auth/set-oauth-source! (fn [provider-id] (:oauth (get-provider provider-id))))
-  (let [providers
-        (or (when-let [cache (fresh-model-cache)]
-              (try
-                (when (not= cache @announced-cache)
-                  (reset! announced-cache cache)
-                  (println "Models: using cached catalogs from" cache))
-                (load-dir-providers cache)
-                (catch Exception e
-                  (binding [*out* *err*]
-                    (println "Warning: ignoring unusable model catalog cache:" (ex-message e)))
-                  nil)))
-            (do (reset! announced-cache nil)
-                (load-bundled-providers)))
-        providers (into {}
-                        (for [[pid p] providers]
-                          [pid (assoc p :oauth (builtin-oauth p))]))]
-    (reset! builtins-atom providers)
-    (reset! providers-atom providers)
-    providers))
+   its generated providers at creation). AGENT-DIR pins the models-cache
+   default's scope dir (KMET_CODING_AGENT_DIR sandboxing); nil resolves via
+   cfg/get-agent-dir."
+  ([] (load-catalogs! nil))
+  ([agent-dir]
+   (auth/set-config-key-source! (fn [provider-id] (:api-key (get-provider provider-id))))
+   (auth/set-oauth-source! (fn [provider-id] (:oauth (get-provider provider-id))))
+   (let [providers
+         (or (when-let [cache (fresh-model-cache agent-dir)]
+               (try
+                 (when (not= cache @announced-cache)
+                   (reset! announced-cache cache)
+                   (println "Models: using cached catalogs from" cache))
+                 (load-dir-providers cache)
+                 (catch Exception e
+                   (binding [*out* *err*]
+                     (println "Warning: ignoring unusable model catalog cache:" (ex-message e)))
+                   nil)))
+             (do (reset! announced-cache nil)
+                 (load-bundled-providers)))
+         providers (into {}
+                         (for [[pid p] providers]
+                           [pid (assoc p :oauth (builtin-oauth p))]))]
+     (reset! builtins-atom providers)
+     (reset! providers-atom providers)
+     providers)))
 
 ;; ─── Provider composition (pi: ModelRuntime rebuildProviders /           ──
 ;;    recomposeProvider / registerProvider / registerNativeProvider /        ──
@@ -622,20 +640,23 @@
    per-provider composition errors fall back to the built-in for that
    provider (a config-only provider that fails to compose is dropped).
    Registers the auth config-key source (models.edn/extension :api-key), so
-   auth resolution and availability reflect configured keys."
-  []
-  (load-catalogs!)
-  (model-config/load-config!)
-  (clear-providers!)
-  (reset! composition-errors {})
-  (let [ids (into (sorted-set)
-                  (concat (keys @builtins-atom)
-                          (model-config/get-provider-ids)
-                          (keys @extension-providers)
-                          (keys @native-extension-providers)))]
-    (doseq [pid ids]
-      (recompose-provider! pid)))
-  @providers-atom)
+   auth resolution and availability reflect configured keys. AGENT-DIR pins
+   the global file's scope dir and the models-cache default
+   (KMET_CODING_AGENT_DIR sandboxing); nil resolves via cfg/get-agent-dir."
+  ([] (load-models-config! nil))
+  ([agent-dir]
+   (load-catalogs! agent-dir)
+   (model-config/load-config! agent-dir)
+   (clear-providers!)
+   (reset! composition-errors {})
+   (let [ids (into (sorted-set)
+                   (concat (keys @builtins-atom)
+                           (model-config/get-provider-ids)
+                           (keys @extension-providers)
+                           (keys @native-extension-providers)))]
+     (doseq [pid ids]
+       (recompose-provider! pid)))
+   @providers-atom))
 
 (defn get-model-config-error
   "models.edn load + composition error string (pi ModelRuntime.getError):

@@ -57,11 +57,23 @@
     (t/is (= :remote (:kind (pkgs/parse-source "npm:foo@1.0.0"))))
     (t/is (= :remote (:kind (pkgs/parse-source "git://host/x"))))))
 
+(defn- with-stubbed-cwd
+  "Run F with the agent dir and cwd pointed at empty temp dirs, so the
+   real user/project auto roots stay out of pure package-resolution
+   assertions (pi tests build isolated agent/cwd fixtures the same way)."
+  [f]
+  (let [sandbox (tmp-dir)
+        empty-cwd (tmp-dir)]
+    (with-redefs [cfg/get-agent-dir (fn [] sandbox)
+                  cfg/project-dir (fn [] (str (fs/path empty-cwd ".kmet")))
+                  fs/cwd (fn [] empty-cwd)]
+      (f))))
+
 ;; ─── Resolution over a package directory ───────────────────────────────────
 
 (t/deftest test-resolve-conventional-package
   (let [dir (make-package (tmp-dir))
-        res (pkgs/resolve-package-items {:packages [dir]} nil)]
+        res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [dir]} nil))]
     (t/is (= #{:extensions :skills :prompts :themes} (set (keys res))))
     (t/is (= 3 (count (:extensions res))))
     (t/is (= 2 (count (:skills res))))
@@ -75,7 +87,7 @@
   (let [dir (tmp-dir)
         f (str dir "/ext.clj")]
     (spit f "(ns ext)\n")
-    (let [res (pkgs/resolve-package-items {:packages [f]} nil)]
+    (let [res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [f]} nil))]
       (t/is (= [f] (mapv :path (:extensions res))))
       (t/is (empty? (:skills res)))
       (t/is (= dir (get-in (first (:extensions res)) [:metadata :base-dir]))))))
@@ -84,7 +96,7 @@
   (let [dir (tmp-dir)]
     (spit (str dir "/extension.edn") "{:name \"pkg-ext\" :entry pkg.ext}\n")
     (spit (str dir "/pkg_ext.clj") "(ns pkg.ext)\n")
-    (let [res (pkgs/resolve-package-items {:packages [dir]} nil)]
+    (let [res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [dir]} nil))]
       (t/is (= [dir] (mapv :path (:extensions res))))
       (t/is (empty? (:skills res))))))
 
@@ -92,18 +104,18 @@
   (let [dir (tmp-dir)]
     (spit (str dir "/a.clj") "(ns bare-a)\n")
     (spit (str dir "/b.clj") "(ns bare-b)\n")
-    (let [res (pkgs/resolve-package-items {:packages [dir]} nil)]
+    (let [res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [dir]} nil))]
       (t/is (= #{(str dir "/a.clj") (str dir "/b.clj")}
                (set (map :path (:extensions res))))))))
 
 (t/deftest test-missing-package-skipped
-  (let [res (pkgs/resolve-package-items {:packages [(str (tmp-dir) "/nope")]} nil)]
+  (let [res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [(str (tmp-dir) "/nope")]} nil))]
     (t/is (empty? (:extensions res)))))
 
 (t/deftest test-remote-package-warns-and-skips
   (let [out (java.io.StringWriter.)]
     (binding [*err* out]
-      (let [res (pkgs/resolve-package-items {:packages ["npm:@foo/bar"]} nil)]
+      (let [res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages ["npm:@foo/bar"]} nil))]
         (t/is (empty? (:extensions res)))
         (t/is (str/includes? (str out) "remote source"))))))
 
@@ -112,32 +124,31 @@
 (t/deftest test-filter-patterns
   (let [dir (make-package (tmp-dir))]
     (t/testing "glob include + exclude"
-      (let [res (pkgs/resolve-package-items
-                 {:packages [{:source dir :extensions ["extensions/*.clj" "!extensions/two.clj"]}]} nil)]
+      (let [res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [{:source dir :extensions ["extensions/*.clj" "!extensions/two.clj"]}]} nil))]
         (t/is (= #{"one.clj" "three.clj"}
                  (set (map (comp fs/file-name :path)
                            (filter :enabled (:extensions res))))))))
     (t/testing "empty array disables that type (items stay, unchecked)"
-      (let [res (pkgs/resolve-package-items {:packages [{:source dir :skills []}]} nil)]
+      (let [res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [{:source dir :skills []}]} nil))]
         (t/is (= 2 (count (:skills res))))
         (t/is (every? (complement :enabled) (:skills res)))
         (t/is (= 3 (count (:extensions res))))
         (t/is (every? :enabled (:extensions res)))
         (t/is (= 2 (count (:prompts res))))))
     (t/testing "-path force-excludes exactly"
-      (let [res (pkgs/resolve-package-items {:packages [{:source dir :extensions ["-extensions/two.clj"]}]} nil)]
+      (let [res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [{:source dir :extensions ["-extensions/two.clj"]}]} nil))]
         (t/is (= 3 (count (:extensions res))))
         (t/is (= #{"one.clj" "three.clj"}
                  (set (map (comp fs/file-name :path)
                            (filter :enabled (:extensions res))))))))
     (t/testing "bare name include matches any file of that name"
-      (let [res (pkgs/resolve-package-items {:packages [{:source dir :extensions ["two.clj"]}]} nil)]
+      (let [res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [{:source dir :extensions ["two.clj"]}]} nil))]
         (t/is (= 1 (count (filter :enabled (:extensions res)))))))
     (t/testing "skill patterns may name the skill root"
-      (let [res (pkgs/resolve-package-items {:packages [{:source dir :skills ["skills/root"]}]} nil)]
+      (let [res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [{:source dir :skills ["skills/root"]}]} nil))]
         (t/is (= 1 (count (filter :enabled (:skills res)))))))
     (t/testing "prompt include"
-      (let [res (pkgs/resolve-package-items {:packages [{:source dir :prompts ["prompts/x.md"]}]} nil)]
+      (let [res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [{:source dir :prompts ["prompts/x.md"]}]} nil))]
         (t/is (= 1 (count (filter :enabled (:prompts res)))))))))
 
 (t/deftest test-filter-on-single-artifact-ignored
@@ -146,24 +157,23 @@
   (let [dir (tmp-dir)
         f (str dir "/ext.clj")]
     (spit f "(ns ext)\n")
-    (let [res (pkgs/resolve-package-items {:packages [{:source f :extensions []}]} nil)]
+    (let [res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [{:source f :extensions []}]} nil))]
       (t/is (= 1 (count (:extensions res)))))))
 
 ;; ─── Scope precedence and deltas ───────────────────────────────────────────
 
 (t/deftest test-project-entry-wins
   (let [dir (make-package (tmp-dir))
-        res (pkgs/resolve-package-items {:packages [{:source dir :extensions []}]}
-                                        {:packages [dir]})]
+        res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [{:source dir :extensions []}]}
+                                                           {:packages [dir]}))]
     (t/is (= 3 (count (:extensions res))))
     (t/is (= :project (get-in (first (:extensions res)) [:metadata :scope])))))
 
 (t/deftest test-autoload-false-delta-over-user
   (let [dir (make-package (tmp-dir))
-        res (pkgs/resolve-package-items
-             {:packages [{:source dir :extensions ["-extensions/two.clj"]}]}
-             {:packages [{:source dir :autoload false
-                          :extensions ["+extensions/two.clj"]}]})]
+        res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [{:source dir :extensions ["-extensions/two.clj"]}]}
+                                                           {:packages [{:source dir :autoload false
+                                                                        :extensions ["+extensions/two.clj"]}]}))]
       ;; user entry: one.clj + three.clj; delta re-enables two.clj
     (t/is (= #{"one.clj" "two.clj" "three.clj"}
              (set (map (comp fs/file-name :path) (:extensions res)))))
@@ -171,13 +181,13 @@
 
 (t/deftest test-autoload-false-empty-is-no-op
   (let [dir (make-package (tmp-dir))
-        res (pkgs/resolve-package-items {:packages [dir]}
-                                        {:packages [{:source dir :autoload false :extensions []}]})]
+        res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [dir]}
+                                                           {:packages [{:source dir :autoload false :extensions []}]}))]
     (t/is (= 3 (count (:extensions res))))))
 (t/deftest test-canonical-dedupe-across-packages
   ;; the same file listed by two packages resolves once (first wins)
   (let [root (make-package (tmp-dir))
-        res (pkgs/resolve-package-items {:packages [root]} {:packages [root]})]
+        res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [root]} {:packages [root]}))]
     (t/is (= 2 (count (:skills res))))))
 
 (t/deftest test-resolve-preserves-package-order
@@ -189,7 +199,7 @@
       (fs/create-dirs (str root "/extensions"))
       (doseq [i (range 10)]
         (spit (str root "/extensions/e" i ".clj") "(ns x)\n")))
-    (let [res (pkgs/resolve-package-items {:packages [p1 p2]} nil)]
+    (let [res (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [p1 p2]} nil))]
       (t/is (= (into (mapv #(str "e" % ".clj") (range 10))
                      (mapv #(str "e" % ".clj") (range 10)))
                (mapv (comp fs/file-name :path) (:extensions res)))))))
@@ -198,14 +208,18 @@
 
 (defn- with-isolated-settings
   "Run F with the global settings file, agent dir, project settings file
-   and project dir pointed at temp dirs (pi user/project scope)."
+   and project dir pointed at temp dirs (pi user/project scope). The cwd
+   is stubbed to an empty temp dir so the real .kmet auto roots stay out
+   of the resolution."
   [f]
   (let [global-dir (tmp-dir)
-        project-dir (str (fs/path (tmp-dir) ".kmet"))]
+        project-dir (str (fs/path (tmp-dir) ".kmet"))
+        empty-cwd (tmp-dir)]
     (with-redefs [cfg/global-settings-path (fn [] (str (fs/path global-dir "settings.edn")))
                   cfg/get-agent-dir (fn [] global-dir)
                   cfg/project-settings-path (fn [] (str (fs/path project-dir "settings.edn")))
-                  cfg/project-dir (fn [] project-dir)]
+                  cfg/project-dir (fn [] project-dir)
+                  fs/cwd (fn [] empty-cwd)]
       (f {:global-dir global-dir :project-dir project-dir}))))
 
 (t/deftest test-add-and-remove-user-package
@@ -305,19 +319,26 @@
 
 (defn- with-settings
   "Run F with user settings pointing at PACKAGES (absolute temp paths, so
-   no scope-base resolution is involved)."
+   no scope-base resolution is involved). Agent dir and cwd point at empty
+   temp dirs so the unified resolution's auto/top-level layers contribute
+   nothing — only the packages under test load."
   [f & packages]
-  (with-redefs [pkgs/user-settings-map (fn [] {:packages (vec packages)})
-                pkgs/project-settings-map (fn [] {})]
-    (f)))
+  (let [sandbox (tmp-dir)
+        empty-cwd (tmp-dir)]
+    (with-redefs [pkgs/user-settings-map (fn [] {:packages (vec packages)})
+                  pkgs/project-settings-map (fn [] {})
+                  cfg/get-agent-dir (fn [] sandbox)
+                  cfg/project-dir (fn [] (str (fs/path empty-cwd ".kmet")))
+                  fs/cwd (fn [] empty-cwd)]
+      (f))))
 
-(t/deftest test-load-package-skills-and-prompts
+(t/deftest test-load-skills-and-prompts
   (with-empty-registries
     (fn []
       (let [dir (make-package (tmp-dir))]
         (with-settings (fn []
-                         (pkgs/load-package-skills!)
-                         (pkgs/load-package-prompts!)
+                         (pkgs/load-skills!)
+                         (pkgs/load-prompts!)
                          (t/is (= #{"skill-a" "flat-skill"}
                                   (set (map :name (skills/get-skills)))))
                          (t/is (= #{"x" "y"}
@@ -329,7 +350,7 @@
     (fn []
       (let [dir (make-package (tmp-dir))]
         (with-settings (fn []
-                         (pkgs/load-package-skills!)
+                         (pkgs/load-skills!)
                          (t/is (= #{"skill-a"}
                                   (set (map :name (skills/get-skills))))))
           {:source dir :skills ["-skills/flat.md"]})))))
@@ -338,7 +359,7 @@
   (let [dir (make-package (tmp-dir))]
     (try
       (with-settings (fn []
-                       (pkgs/load-package-themes!)
+                       (pkgs/load-themes!)
                        (t/is (some? (theme/get-theme-by-name "package-theme"))))
         {:source dir})
       (finally
@@ -444,7 +465,7 @@
       (let [file (str (fs/path global-dir "ext.clj"))]
         (spit file "(ns x)\n")
         (t/testing "a file source resolves to a single always-enabled extension"
-          (let [item (first (:extensions (pkgs/resolve-package-items {:packages [file]} nil)))]
+          (let [item (first (:extensions (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [file]} nil))))]
             (t/is (pkgs/single-extension-item? item))
             (t/is (true? (:enabled item)))
             (t/testing "toggling it writes nothing"
@@ -454,11 +475,234 @@
         (t/testing "an extension.edn directory too"
           (let [dir (tmp-dir)]
             (spit (str dir "/extension.edn") "{:name \"pkg-ext\" :entry pkg.ext}\n")
-            (let [item (first (:extensions (pkgs/resolve-package-items {:packages [dir]} nil)))]
+            (let [item (first (:extensions (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [dir]} nil))))]
               (t/is (pkgs/single-extension-item? item))
               (t/is (false? (pkgs/apply-global-toggle! item false))))))
         (t/testing "conventional package resources stay toggleable"
           (let [pkg (make-package (tmp-dir))]
             (t/is (not (pkgs/single-extension-item? (first (:extensions
-                                                            (pkgs/resolve-package-items {:packages [pkg]} nil))))))))))))
+                                                            (with-stubbed-cwd #(pkgs/resolve-package-items {:packages [pkg]} nil)))))))))))))
+
+;; ─── Top-level settings entries (pi: resolveLocalEntries) ─────────────────
+
+(t/deftest test-top-level-plain-file-and-dir
+  ;; pi resolveLocalEntries: plain entries (no glob/override syntax) expand
+  ;; against the base dir — a file contributes itself, a directory its
+  ;; discovered items; with no pattern entries every collected file is
+  ;; enabled (pi: applyPatterns with an empty pattern list).
+  (let [sandbox (tmp-dir)
+        ext-file (str sandbox "/solo.clj")
+        extra (str sandbox "/extra")]
+    (spit ext-file "(ns solo)\n")
+    (fs/create-dirs extra)
+    (spit (str extra "/x.clj") "(ns x)\n")
+    (with-redefs [cfg/get-agent-dir (fn [] sandbox)
+                  cfg/project-dir (fn [] (str (tmp-dir) "/.kmet"))
+                  fs/cwd (fn [] (tmp-dir))]
+      (let [res (pkgs/resolve-package-items {:extensions ["solo.clj" "extra"]} nil)]
+        (t/is (= #{ext-file (str extra "/x.clj")}
+                 (set (map :path (:extensions res)))))
+        (t/is (every? :enabled (:extensions res)))
+        (t/is (every? #(= :top-level (get-in % [:metadata :origin])) (:extensions res)))
+        (t/is (every? #(= "local" (get-in % [:metadata :source])) (:extensions res)))
+        (t/is (every? #(= sandbox (get-in % [:metadata :base-dir])) (:extensions res)))))))
+
+(t/deftest test-top-level-includes-narrow
+  ;; the dir entry contributes both files; the glob + exclude narrow to
+  ;; just a.md (pi: plain entries expand, pattern entries filter).
+  (let [sandbox (tmp-dir)
+        proj (tmp-dir)]
+    (fs/create-dirs (str sandbox "/prompts"))
+    (spit (str sandbox "/prompts/a.md") "# a\n")
+    (spit (str sandbox "/prompts/b.md") "# b\n")
+    (with-redefs [cfg/get-agent-dir (fn [] sandbox)
+                  cfg/project-dir (fn [] (str proj "/.kmet"))
+                  fs/cwd (fn [] proj)]
+      (let [res (pkgs/resolve-package-items {:prompts ["prompts" "prompts/*.md" "!prompts/b.md"]} nil)
+            local (filterv #(= "local" (get-in % [:metadata :source])) (:prompts res))]
+        ;; excluded files stay in the resolution with :enabled false
+        ;; (pi: every collected file is added with its enabled state)
+        (t/is (= #{(str sandbox "/prompts/a.md") (str sandbox "/prompts/b.md")}
+                 (set (map :path local))))
+        (t/is (= [(str sandbox "/prompts/a.md")]
+                 (mapv :path (filterv :enabled local))))))))
+
+(t/deftest test-top-level-overrides-adjust
+  (let [sandbox (tmp-dir)]
+    (fs/create-dirs (str sandbox "/prompts"))
+    (spit (str sandbox "/prompts/a.md") "# a\n")
+    (spit (str sandbox "/prompts/b.md") "# b\n")
+    (with-redefs [cfg/get-agent-dir (fn [] sandbox)
+                  fs/cwd (fn [] (tmp-dir))]
+      (let [res (pkgs/resolve-package-items {:prompts ["prompts" "!prompts/b.md"]} nil)
+            by-name (into {} (map (fn [i] [(fs/file-name (:path i)) i]) (:prompts res)))]
+        (t/is (true? (:enabled (by-name "a.md"))))
+        (t/is (false? (:enabled (by-name "b.md")))))
+      (let [res (pkgs/resolve-package-items {:prompts ["prompts" "-prompts/b.md"]} nil)
+            by-name (into {} (map (fn [i] [(fs/file-name (:path i)) i]) (:prompts res)))]
+        (t/is (false? (:enabled (by-name "b.md"))))))))
+
+(t/deftest test-top-level-project-scope
+  (let [sandbox (tmp-dir)
+        proj (tmp-dir)
+        proj-ext (str proj "/.kmet/extensions")]
+    (fs/create-dirs proj-ext)
+    (spit (str proj-ext "/p.clj") "(ns p)\n")
+    (with-redefs [cfg/get-agent-dir (fn [] sandbox)
+                  cfg/project-dir (fn [] (str proj "/.kmet"))
+                  fs/cwd (fn [] proj)]
+      (let [res (pkgs/resolve-package-items nil {:extensions ["extensions"]})]
+        (t/is (= [(str proj-ext "/p.clj")] (mapv :path (:extensions res))))
+        (t/is (= :project (get-in (first (:extensions res)) [:metadata :scope])))))))
+
+(t/deftest test-top-level-missing-path-skipped
+  (with-redefs [cfg/get-agent-dir (fn [] (tmp-dir))
+                cfg/project-dir (fn [] (str (tmp-dir) "/.kmet"))
+                fs/cwd (fn [] (tmp-dir))]
+    (let [res (pkgs/resolve-package-items {:extensions ["nope.clj"]} nil)]
+      (t/is (empty? (:extensions res))))))
+
+;; ─── Auto-dir scans (pi: addAutoDiscoveredResources) ──────────────────────
+
+(t/deftest test-auto-dirs-scan-with-overrides
+  (let [sandbox (tmp-dir)
+        proj (tmp-dir)]
+    (fs/create-dirs (str sandbox "/extensions"))
+    (spit (str sandbox "/extensions/a.clj") "(ns a)\n")
+    (spit (str sandbox "/extensions/b.clj") "(ns b)\n")
+    (fs/create-dirs (str proj "/.kmet/extensions"))
+    (spit (str proj "/.kmet/extensions/c.clj") "(ns c)\n")
+    (with-redefs [cfg/get-agent-dir (fn [] sandbox)
+                  cfg/project-dir (fn [] (str proj "/.kmet"))
+                  fs/cwd (fn [] proj)]
+      (let [res (pkgs/resolve-package-items {:extensions ["!extensions/b.clj"]} nil)
+            by-name (into {} (map (fn [i] [(fs/file-name (:path i)) i]) (:extensions res)))]
+        (t/is (= #{"a.clj" "b.clj" "c.clj"} (set (keys by-name))))
+        (t/is (false? (:enabled (by-name "b.clj"))) "!-override disables")
+        (t/is (true? (:enabled (by-name "a.clj"))))
+        (t/is (= :project (get-in (by-name "c.clj") [:metadata :scope]))
+              "project auto wins order")
+        (t/is (= :user (get-in (by-name "a.clj") [:metadata :scope])))
+        (t/is (every? #(= "auto" (get-in % [:metadata :source])) (vals by-name))))
+      (let [enabled-of (fn [patterns]
+                         (->> (pkgs/resolve-package-items {:extensions patterns} nil)
+                              (:extensions)
+                              (filter #(= "b.clj" (fs/file-name (:path %))))
+                              first
+                              :enabled))]
+        (t/is (true? (enabled-of ["+extensions/b.clj"])) "force-include keeps enabled")
+        (t/testing "pi precedence: a later check wins (+ over !, - over +)"
+          (t/is (true? (enabled-of ["!extensions/b.clj" "+extensions/b.clj"]))
+                "force-include overrides an exclude")
+          (t/is (false? (enabled-of ["+extensions/b.clj" "-extensions/b.clj"]))
+                "force-exclude overrides a force-include"))))))
+
+(t/deftest test-precedence-project-local-beats-user-auto
+  ;; same canonical path via a project top-level entry and the user auto
+  ;; dir: the project-local item wins (first-wins in pi precedence order)
+  (let [sandbox (tmp-dir)
+        proj (tmp-dir)
+        shared (str proj "/shared.clj")]
+    (fs/create-dirs (str sandbox "/extensions"))
+    (spit shared "(ns shared)\n")
+    (spit (str sandbox "/extensions/other.clj") "(ns other)\n")
+    (with-redefs [cfg/get-agent-dir (fn [] sandbox)
+                  cfg/project-dir (fn [] (str proj "/.kmet"))
+                  fs/cwd (fn [] proj)]
+      (let [res (pkgs/resolve-package-items nil {:extensions [(str proj "/shared.clj")]})]
+        (t/is (some #(= shared (:path %)) (:extensions res)))))))
+
+;; ─── Top-level toggle writes ──────────────────────────────────────────────
+
+(t/deftest test-top-level-toggle-writes-array
+  (with-isolated-settings
+    (fn [{:keys [global-dir]}]
+      (let [ext (str global-dir "/extensions")]
+        (fs/create-dirs ext)
+        (spit (str ext "/a.clj") "(ns a)\n")
+        (let [item (first (:extensions (pkgs/resolve-package-items nil nil)))]
+          (t/is (pkgs/top-level-item? item))
+          (t/is (= "extensions/a.clj" (pkgs/top-level-pattern item)))
+          (t/is (true? (pkgs/apply-global-toggle! item false)))
+          (t/is (= ["-extensions/a.clj"] (:extensions (edn/read-string (slurp (str global-dir "/settings.edn"))))))
+          (t/is (true? (pkgs/apply-global-toggle! item true)))
+          (t/is (= ["+extensions/a.clj"] (:extensions (edn/read-string (slurp (str global-dir "/settings.edn")))))))))))
+
+(t/deftest test-project-top-level-override-cycle
+  (with-isolated-settings
+    (fn [{:keys [global-dir]}]
+      (let [ext (str global-dir "/extensions")]
+        (fs/create-dirs ext)
+        (spit (str ext "/a.clj") "(ns a)\n")
+        (let [item (first (:extensions (pkgs/resolve-package-items nil nil)))]
+          (t/is (= :inherit (pkgs/top-level-override-state-of item)))
+          (t/is (true? (pkgs/apply-project-override! item :unload)))
+          (t/is (= :unload (pkgs/top-level-override-state-of item)))
+          (t/is (true? (pkgs/apply-project-override! item :load)))
+          (t/is (= :load (pkgs/top-level-override-state-of item)))
+          (t/is (true? (pkgs/apply-project-override! item :inherit)))
+          (t/is (= :inherit (pkgs/top-level-override-state-of item))))))))
+
+;; ─── Project-scope views and override patterns (regressions) ──────────────
+
+(t/deftest test-top-level-override-patterns-project-item-dedupes
+  ;; a project item's own base dir IS the project scope root, so the
+  ;; relative pattern forms collapse to one string — building the set must
+  ;; not throw (babashka/SCI rejects duplicate evaluated set-literal
+  ;; elements)
+  (let [proj (tmp-dir)
+        file (str proj "/.kmet/prompts/test.md")]
+    (fs/create-dirs (str proj "/.kmet/prompts"))
+    (spit file "# t\n")
+    (with-redefs [cfg/get-agent-dir (fn [] (tmp-dir))
+                  cfg/project-dir (fn [] (str proj "/.kmet"))
+                  fs/cwd (fn [] proj)]
+      (let [item (first (:prompts (pkgs/resolve-package-items nil nil)))
+            patterns (pkgs/top-level-override-patterns item :project)]
+        (t/is (contains? patterns "prompts/test.md"))
+        (t/is (contains? patterns file))
+        (t/is (= :inherit (pkgs/top-level-override-state-of item)))
+        (t/is (= "prompts/test.md" (pkgs/top-level-pattern item)))))))
+
+(t/deftest test-user-view-excludes-project-scope
+  ;; PROJECT-SCOPE? false is pi's global config view (untrusted settings
+  ;; manager): project settings entries, project packages and project auto
+  ;; dirs are all absent
+  (let [sandbox (tmp-dir)
+        proj (tmp-dir)]
+    (fs/create-dirs (str sandbox "/prompts"))
+    (spit (str sandbox "/prompts/user.md") "# u\n")
+    (fs/create-dirs (str proj "/.kmet/prompts"))
+    (spit (str proj "/.kmet/prompts/proj.md") "# p\n")
+    (with-redefs [cfg/get-agent-dir (fn [] sandbox)
+                  cfg/project-dir (fn [] (str proj "/.kmet"))
+                  fs/cwd (fn [] proj)]
+      (let [user-view (pkgs/resolve-package-items nil {:prompts ["prompts/proj.md"]} nil false)
+            full-view (pkgs/resolve-package-items nil {:prompts ["prompts/proj.md"]})]
+        (t/is (= [(str sandbox "/prompts/user.md")] (mapv :path (:prompts user-view))))
+        (t/is (= #{(str sandbox "/prompts/user.md") (str proj "/.kmet/prompts/proj.md")}
+                 (set (map :path (:prompts full-view)))))))))
+
+(t/deftest test-auto-dir-scope-not-path-prefix
+  ;; regression: the agent dir can live inside the project scope root
+  ;; (cwd = $HOME → project $HOME/.kmet contains agent $HOME/.kmet/agent).
+  ;; Scope must come from exact root equality — a path-prefix test
+  ;; mislabeled the agent auto roots as project and the global view lost
+  ;; them.
+  (let [home-root (tmp-dir)
+        project-dir (str (fs/path home-root ".kmet"))
+        agent-dir (str (fs/path project-dir "agent"))]
+    (fs/create-dirs (str (fs/path agent-dir "extensions")))
+    (spit (str (fs/path agent-dir "extensions/a.clj")) "(ns a)\n")
+    (with-redefs [cfg/get-agent-dir (fn [] agent-dir)
+                  cfg/project-dir (fn [] project-dir)
+                  fs/cwd (fn [] home-root)]
+      (let [full (:extensions (pkgs/resolve-package-items nil nil))
+            item (first full)]
+        (t/is (= 1 (count full)))
+        (t/is (= :user (get-in item [:metadata :scope])))
+        (t/is (= :top-level (get-in item [:metadata :origin])))
+        (t/is (= "auto" (get-in item [:metadata :source]))))
+      (t/is (= 1 (count (:extensions (pkgs/resolve-package-items nil nil nil false))))
+            "global view keeps the agent auto resources"))))
 

@@ -5,12 +5,25 @@
             [kmet.extensions.tree-sitter.test-util :as tu]))
 
 (deftest default-root-test
-  (testing "default root lives at ~/.kmet/agent/tree-sitter"
+  (testing "default root lives at ~/.kmet/agent/tree-sitter (the host
+            agent dir; core/init may repoint it)"
     (is (= (fs/path (fs/home) ".kmet" "agent" "tree-sitter")
            (paths/root))))
   (testing "bin name follows the host OS"
     (is (= (if (fs/windows?) "tree-sitter.exe" "tree-sitter")
            (paths/bin-name)))))
+
+(deftest set-default-root!-test
+  (let [orig (paths/root)
+        base (tu/temp-dir! "ts-root")]
+    (try
+      (testing "the host agent dir repoints the default root"
+        (paths/set-default-root! (str (fs/path base "tree-sitter")))
+        (is (= (fs/path base "tree-sitter") (paths/root)))
+        (is (= (fs/path base "tree-sitter" "bin") (paths/bin-dir))))
+      (testing "explicit base overrides still win"
+        (is (= (fs/path base "other") (paths/root (fs/path base "other")))))
+      (finally (paths/set-default-root! orig)))))
 
 (deftest base-override-test
   (let [base (tu/temp-dir! "ts-paths")]

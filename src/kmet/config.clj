@@ -50,10 +50,10 @@
    :system-prompt nil
    :append-system-prompt nil
    :thinking :off
-   :extensions-dir "~/.kmet/agent/extensions"
-   :skills-dir "~/.kmet/agent/skills"
-   :prompts-dir "~/.kmet/agent/prompts"
-   :themes-dir "~/.kmet/agent/themes"})
+   :extensions []
+   :skills []
+   :prompts []
+   :themes []})
 
 ;; ─── Path expansion ────────────────────────────────────────────────────────
 
@@ -65,7 +65,26 @@
   "Config keys whose values are filesystem paths. Resolved relative to their
    scope dir (pi: paths in ~/.pi/agent/settings.json resolve relative to
    ~/.pi/agent; in .pi/settings.json relative to .pi)."
-  #{:session-dir :extensions-dir :skills-dir :prompts-dir :themes-dir})
+  #{:session-dir})
+
+(def ^:private retired-dir-keys
+  "Retired resource-dir keys (:extensions-dir etc.). The auto roots are
+   fixed (pi: join(agentDir, type) + join(cwd, CONFIG_DIR_NAME, type));
+   a settings file still carrying one gets a migration warning at load."
+  #{:extensions-dir :skills-dir :prompts-dir :themes-dir})
+
+(defn- warn-retired-dir-keys!
+  "Warn once per retired :*-dir key found in the user/project settings maps
+   (nil = file missing/unreadable, skipped). Points at the top-level
+   resource entries that replace them."
+  [user-config project-config]
+  (doseq [[cfg scope] [[user-config "global"] [project-config "project"]]]
+    (doseq [k (sort (filter #(contains? (or cfg {}) %) retired-dir-keys))]
+      (binding [*out* *err*]
+        (println (str "Warning: " (name k) " in " scope " settings is retired — "
+                      "resource dirs are fixed (agent + .kmet); move the path "
+                      "into a top-level :" (subs (name k) 0 (- (count (name k)) 4))
+                      " entry."))))))
 
 (def deep-merge eds/deep-merge)
 
@@ -149,15 +168,20 @@
 (defn load-config
   "Load and merge configuration from user and project directories.
    Path values are resolved per scope before merging (global paths relative
-   to ~/.kmet/agent, project paths relative to .kmet), then deep-merged:
+   to the agent dir, project paths relative to .kmet), then deep-merged:
    defaults < user < project, with nested maps merged key-by-key (pi: project
-   settings override global, nested objects merge).
+   settings override global, nested objects merge). AGENT-DIR pins the scope
+   dir for the global settings file, auth.edn, and models.edn
+   (KMET_CODING_AGENT_DIR sandboxing); nil resolves via auth/resolve-agent-dir.
+   Warns once per retired :*-dir key present in a settings file.
    Returns merged map."
-  [& {:keys [no-env? no-settings?]}]
-  (let [user-config (when-not no-settings? (load-edn-file "~/.kmet/agent/settings.edn"))
+  [& {:keys [no-env? no-settings? agent-dir]}]
+  (let [agent-dir (or agent-dir (auth/resolve-agent-dir))
+        user-config (when-not no-settings? (load-edn-file (str (fs/path agent-dir "settings.edn"))))
         project-config (when-not no-settings? (load-edn-file ".kmet/settings.edn"))
-        _ (auth/load-auth!)
-        global-dir (expand-path "~/.kmet/agent")
+        _ (auth/load-auth! agent-dir)
+        _ (warn-retired-dir-keys! user-config project-config)
+        global-dir agent-dir
         project-dir (str (fs/absolutize ".kmet"))
         env-provider (when-not no-env?
                        (or (some-> (System/getenv "KMET_PROVIDER") keyword)
@@ -188,9 +212,12 @@
   (expand-path (:session-dir config)))
 
 (defn get-agent-dir
-  "The global agent directory (~/.kmet/agent), home-expanded."
+  "The global agent directory. Defaults to ~/.kmet/agent; honors the
+   KMET_CODING_AGENT_DIR env override (pi: getAgentDir + ENV_AGENT_DIR).
+   Delegates to auth/resolve-agent-dir — auth owns the root so ai
+   namespaces (which must not require kmet.config) share it."
   []
-  (expand-path "~/.kmet/agent"))
+  (auth/resolve-agent-dir))
 
 ;; ─── Settings persistence (pi: SettingsManager setters) ───────────────────
 ;; The config module reads settings.edn at load; these fns persist individual
@@ -208,9 +235,11 @@
            (catch Exception _ nil)))))
 
 (defn global-settings-path
-  "Path of the global settings file (~/.kmet/agent/settings.edn)."
-  []
-  (expand-path "~/.kmet/agent/settings.edn"))
+  "Path of the global settings file (~/.kmet/agent/settings.edn,
+   KMET_CODING_AGENT_DIR-aware). Pass AGENT-DIR to pin the scope dir
+   (KMET_CODING_AGENT_DIR sandboxing); nil resolves via get-agent-dir."
+  ([] (global-settings-path nil))
+  ([agent-dir] (str (fs/path (or agent-dir (get-agent-dir)) "settings.edn"))))
 
 (defn project-settings-path
   "Path of the project settings file (.kmet/settings.edn, resolved against
@@ -426,10 +455,10 @@
 
 (defn- prompt-file-candidates
   "Absolute candidate paths for a prompt file: project (.kmet) first, then
-   global (~/.kmet/agent) — pi checks the project before the agent dir."
+   the agent dir — pi checks the project before the agent dir."
   [filename]
   [(str (fs/path (fs/cwd) ".kmet" filename))
-   (str (fs/path (expand-path "~/.kmet/agent") filename))])
+   (str (fs/path (get-agent-dir) filename))])
 
 (defn- discover-prompt-file
   "First existing candidate for a prompt file, or nil."
@@ -478,35 +507,29 @@
 (defn get-theme [config]
   (theme/get-theme (get-theme-name config)))
 
-(defn resource-dirs
-  "All directories to load for a resource type (pi: global + project +
-   explicit paths load simultaneously): the global default, the project-local
-   default (project-rel, resolved against cwd), and the merged config value
-   (an explicit override), deduped by canonical path. Order = pi load order
-   (global first), so global wins name collisions.
-
-   Nil entries are dropped: an unset or explicitly-disabled config value must
-   not fall through to the cwd — expand-path of nil is the empty string,
-   which canonicalizes to the project root and would make a partial config
-   recursively scan the whole project as a resource dir."
-  [config resource-key project-rel]
-  (->> [(get default-config resource-key)
-        project-rel
-        (get config resource-key)]
-       (remove nil?)
-       (map expand-path)
-       (map #(str (fs/canonicalize (io/file %))))
-       distinct
-       (mapv str)))
+(defn auto-resource-dirs
+  "The fixed auto-discovery roots for a resource type (pi: RESOURCE_TYPES +
+   join(agentDir, type) + join(cwd, CONFIG_DIR_NAME, type)): the agent-dir
+   dir and the project-local .kmet dir, existing dirs only, in pi load order
+   (global first, so global wins name collisions). AGENT-DIR pins the global
+   root (KMET_CODING_AGENT_DIR sandboxing); nil resolves via get-agent-dir."
+  ([resource-type] (auto-resource-dirs resource-type nil))
+  ([resource-type agent-dir]
+   (let [roots [(str (fs/path (or agent-dir (get-agent-dir)) (name resource-type)))
+                (str (fs/path (fs/cwd) ".kmet" (name resource-type)))]]
+     (filterv fs/directory? roots))))
 
 ;; ─── Initialization ─────────────────────────────────────────────────────────
 
 (defn init!
-  "Load config and themes. Returns the loaded config map.
-   Call once at startup."
-  []
-  (let [config (load-config)
-        themes-dir (expand-path (:themes-dir config))]
-    (fs/create-dirs (get-session-dir config))
-    (theme/load-themes-from-dir themes-dir)
-    config))
+  "Load config. Returns the loaded config map. Call once at startup.
+   AGENT-DIR pins the scope dir (KMET_CODING_AGENT_DIR sandboxing); nil
+   resolves via auth/resolve-agent-dir. Themes are NOT loaded here — the
+   unified resolution (packages/load-themes!) loads them with the other
+   resources, so settings toggles apply."
+  ([] (init! nil))
+  ([agent-dir]
+   (let [agent-dir (or agent-dir (auth/resolve-agent-dir))
+         config (load-config :agent-dir agent-dir)]
+     (fs/create-dirs (get-session-dir config))
+     config)))

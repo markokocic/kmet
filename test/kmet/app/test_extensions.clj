@@ -10,6 +10,7 @@
             [clojure.java.io :as io]
             [babashka.fs :as fs]
             [kmet.extension :as ext]
+            [kmet.config :as cfg]
             [kmet.ai.models :as models]
             [kmet.app.extensions :as extensions]
             [kmet.app.commands :as commands]
@@ -89,6 +90,15 @@
       (remove-ns 'hello-ext))))
 
 ;; ─── Provider registration through the api (:models facades) ─────────────
+
+(t/deftest test-extension-api-carries-agent-dir
+  (testing "api :agent-dir is the host agent dir (KMET_CODING_AGENT_DIR-aware)"
+    (with-redefs [cfg/get-agent-dir (fn [] "/sandbox/agent")]
+      (let [api ((var extensions/create-extension-api)
+                 {:name "agent-dir-test" :path "target/test-ext-agent-dir.clj"
+                  :deregister-fns (atom [])})]
+        (t/is (= "/sandbox/agent" (:agent-dir api)))
+        (t/is (= "/sandbox/agent" (ext/get-agent-dir api)))))))
 
 (t/deftest test-extension-provider-registration
   (testing "api :models register-provider! / unregister-provider! (pi ctx.registerProvider)"

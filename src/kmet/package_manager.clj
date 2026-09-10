@@ -85,7 +85,8 @@
   (println "Usage:")
   (println "  kmet config [-l] [-a|--approve|--no-approve]")
   (println)
-  (println "Open the resource configuration TUI to enable or disable package resources.")
+  (println "Open the resource configuration TUI to enable or disable resources")
+  (println "(packages, top-level settings entries and the auto dirs).")
   (println "Without -l, starts in global settings (~/.kmet/agent/settings.edn).")
   (println "Press Tab in the TUI to switch between global and project-local modes.")
   (println)
@@ -190,14 +191,16 @@
         1)))
 
 (defn- print-list
-  "pi: the `list` command output — user and project sections, sources with
-   their installed path underneath (dim in pi, plain here)."
+  "pi: the `list` command output — user and project sections, sources (with
+   pi's `(filtered)` marker for object entries) and their installed path
+   underneath (dim in pi, plain here)."
   []
   (let [configured (pkgs/list-configured-packages)
         user (filter #(= :user (:scope %)) configured)
         project (filter #(= :project (:scope %)) configured)
         format-pkg (fn [pkg]
-                     (println (str "  " (:source pkg)))
+                     (println (str "  " (:source pkg)
+                                   (when (:filtered pkg) " (filtered)")))
                      (when (:installed-path pkg)
                        (println (str "    " (:installed-path pkg)))))]
     (if (empty? configured)
@@ -221,6 +224,9 @@
   [{:keys [local]}]
   (let [config (cfg/init!)
         project-mode? (or local (fs/exists? (str (fs/path (fs/cwd) ".kmet"))))
+        ;; custom themes for the config's :theme name (pi: initTheme after
+        ;; the resource loader)
+        _ (pkgs/load-themes!)
         terminal (term/create-terminal)
         tui (tui/create-tui terminal)
         ;; theme before the UI starts (pi: initTheme(settings.getTheme()))

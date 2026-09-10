@@ -4,7 +4,7 @@
 ;; target-agnostic: `bb generate-models` (via scripts/generate_models.clj, a
 ;; shim over this namespace) regenerates the committed src/kmet/ai/model_data;
 ;; `kmet --generate-models` runs the same pipeline into the user-level cache
-;; (~/.kmet/agent/models-cache, kmet.ai.models/*models-cache-dir*) without
+;; (~/.kmet/agent/models-cache, kmet.ai.models/default-models-cache-dir) without
 ;; touching the repo.
 ;;
 ;; Radius is deliberately dropped (pi-messages API + dynamic gateway

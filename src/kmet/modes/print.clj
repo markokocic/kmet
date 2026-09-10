@@ -59,12 +59,8 @@
   [opts]
   (let [{:keys [model provider messages config]} opts
         config (cfg/apply-cli-overrides (or config (cfg/load-config :no-env? true)) opts)
-        _ (doseq [d (cfg/resource-dirs config :skills-dir ".kmet/skills")]
-            (skills/load-skills-from-dir d))
-        _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
-            (prompts/load-prompt-templates-from-dir d))
-        _ (packages/load-package-skills!)
-        _ (packages/load-package-prompts!)
+        _ (packages/load-skills!)
+        _ (packages/load-prompts!)
         system-prompt-opts {:custom-prompt (cfg/get-custom-prompt config)
                             :append-prompt (cfg/get-append-system-prompt config)
                             :context-files (context/load-project-context-files

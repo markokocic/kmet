@@ -1,8 +1,10 @@
 (ns kmet.app.test-theme-controller
   "ThemeController tests (pi: InteractiveThemeController) — theme switching,
    auto light/dark sync state, and the on-changed notification."
-  (:require [clojure.test :as t]
+  (:require [babashka.fs :as fs]
+            [clojure.test :as t]
             [clojure.string :as str]
+            [kmet.config :as cfg]
             [kmet.tui.core :as core]
             [kmet.tui.terminal :as term]
             [kmet.tui.theme :as theme]
@@ -53,7 +55,11 @@
   (t/testing "the :theme config setting is applied at construction"
     (let [{:keys [ctrl]} (make-ctrl {:theme "light"})]
       (t/is (= "light" (:name (theme/get-current-theme))))
-      (t/is (= "light" (tc/get-active-theme-name ctrl))))))
+      (t/is (= "light" (tc/get-active-theme-name ctrl)))))
+  (t/testing "the watcher dir is the agent-dir themes root (fixed auto root)"
+    (make-ctrl {:theme "dark"})
+    (t/is (= (str (fs/path (cfg/get-agent-dir) "themes"))
+             @@#'theme/custom-themes-dir))))
 
 (t/deftest test-set-theme-name
   (t/testing "switching themes updates state and notifies"

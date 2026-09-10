@@ -366,16 +366,17 @@
     (t/is (false? (auth/valid-credential? ["a"])))))
 
 (defn- with-auth-file
-  "Run F with auth.edn redirected to a temp file and an empty auth atom."
+  "Run F with the agent dir (and thus auth.edn) redirected to a temp dir and
+   an empty auth atom; F receives the auth file path."
   [f]
-  (let [tmp (str (fs/absolutize (fs/file "target" (str "test-oauth-" (System/currentTimeMillis)))))
-        path (str tmp "/auth.edn")]
-    (fs/create-dirs tmp)
+  (let [agent-dir (str (fs/absolutize (fs/file "target" (str "test-oauth-" (System/currentTimeMillis)))))
+        path (str agent-dir "/auth.edn")]
+    (fs/create-dirs agent-dir)
     (try
-      (with-redefs [auth/auth-file-path (fn [] path)
+      (with-redefs [auth/resolve-agent-dir (fn [] agent-dir)
                     auth/auth-atom (atom {})]
         (f path))
-      (finally (fs/delete-tree tmp)))))
+      (finally (fs/delete-tree agent-dir)))))
 
 (defn- with-oauth-source
   "Install an OAuthAuth source for the test, restoring the previous source."

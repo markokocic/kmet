@@ -1,13 +1,22 @@
 (ns kmet.extensions.tree-sitter.paths
   "User-level cache layout for the tree-sitter extension (SPEC.md):
-   ~/.kmet/agent/tree-sitter/{bin,libs,grammars}/ plus generated config.json.
-   Every public fn takes an optional base-dir override so tests and callers
-   can work against isolated roots; no env override in v1."
+   <agent-dir>/tree-sitter/{bin,libs,grammars}/ plus generated config.json —
+   the host agent dir (KMET_CODING_AGENT_DIR-aware), pointed at the live
+   value by core/init via set-default-root!. Every public fn takes an
+   optional base-dir override so tests and callers can work against
+   isolated roots."
   (:require [babashka.fs :as fs]
             [clojure.java.io :as io]))
 
 (def ^:private default-root
-  (fs/path (fs/home) ".kmet" "agent" "tree-sitter"))
+  (atom (fs/path (fs/home) ".kmet" "agent" "tree-sitter")))
+
+(defn set-default-root!
+  "Point the default root at the host agent dir (KMET_CODING_AGENT_DIR-aware;
+   core/init passes <ext/get-agent-dir>/tree-sitter). The compiled-in
+   ~/.kmet/agent/tree-sitter default stands until then."
+  [dir]
+  (reset! default-root (fs/path dir)))
 
 (defn bin-name
   "Executable file name inside bin/ for the host OS."
@@ -15,8 +24,8 @@
   (if (fs/windows?) "tree-sitter.exe" "tree-sitter"))
 
 (defn root
-  ([] default-root)
-  ([base] (fs/path (or base default-root))))
+  ([] @default-root)
+  ([base] (fs/path (or base @default-root))))
 
 (defn bin-dir
   ([] (bin-dir nil))

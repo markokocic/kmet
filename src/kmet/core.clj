@@ -163,7 +163,7 @@
   (println "  install <source>     Add a local package (directory or file) to settings")
   (println "  remove <source>      Remove a package (alias: uninstall)")
   (println "  list                 List installed packages")
-  (println "  config               Enable/disable package resources (TUI)")
+  (println "  config               Enable/disable resources (TUI)")
   (println)
   (println "Examples:")
   (println "  kmet                    Start interactive TUI")
@@ -271,12 +271,14 @@
       (System/exit 0))
 
     ;; --generate-models runs the bb generate-models pipeline into the
-    ;; user-level cache (~/.kmet/agent/models-cache) and exits — no registry
-    ;; or config needed. load-catalogs! prefers that cache over the built-in
-    ;; model_data whenever it is strictly newer.
+    ;; user-level cache (~/.kmet/agent/models-cache, KMET_CODING_AGENT_DIR-aware)
+    ;; and exits — no registry or config needed. load-catalogs! prefers that
+    ;; cache over the built-in model_data whenever it is strictly newer.
     (when (:generate-models opts)
       (let [{:keys [ok]} (try
-                           (model-gen/generate-and-write! models/*models-cache-dir*)
+                           (model-gen/generate-and-write!
+                            (or models/*models-cache-dir*
+                                (models/default-models-cache-dir)))
                            (catch Exception e
                              (binding [*out* *err*]
                                (println "Error:" (ex-message e)))
@@ -298,13 +300,10 @@
     ;; model resolves) — so --model/--provider and settings.edn can select
     ;; extension-registered providers, and print mode gets extension hooks.
     (let [config (cfg/init!)]
-      (doseq [d (cfg/resource-dirs config :extensions-dir ".kmet/extensions")]
-        (extensions/load-extensions-from-dir d))
-
-      ;; Configured packages load after the auto resource dirs (pi: package
-      ;; resources rank below auto-discovered ones, so dirs win collisions)
-      (packages/load-package-extensions!)
-      (packages/load-package-themes!)
+      ;; One unified load per type (pi: resourceLoader — top-level entries,
+      ;; auto dirs, then packages in precedence order)
+      (packages/load-extensions!)
+      (packages/load-themes!)
 
       ;; Extension CLI flags: the collected --flags become readable via
       ;; extensions/get-flag (pi: registerFlag + getFlag).

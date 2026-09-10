@@ -7,7 +7,8 @@ description: Access MCP (Model Context Protocol) servers through kmet's mcp gate
 
 kmet talks to MCP servers through one lazy `mcp` proxy tool (~200 tokens)
 instead of registering every server tool in your context. Servers are
-configured in `~/.kmet/agent/mcp.edn` (global) and `.kmet/mcp.edn`
+configured in `~/.kmet/agent/mcp.edn` (global; the agent dir —
+`KMET_CODING_AGENT_DIR` moves it) and `.kmet/mcp.edn`
 (project) — see the mcp-adapter README for the full config reference.
 
 ## Workflow: search → describe → call
@@ -119,7 +120,7 @@ prompt commands.
   `:output-guard false` (env kill switch `MCP_OUTPUT_GUARD=0`).
 - OAuth tokens are stored in the OS keyring when available (macOS
   `security`, Linux `secret-tool`, Windows Credential Manager), else
-  plaintext at `~/.kmet/agent/mcp-oauth.edn` (0600). Settings
+  plaintext in the agent dir at `mcp-oauth.edn` (0600). Settings
   `:token-storage :keyring | :file | :auto` (default `:auto`); env
   `MCP_TOKEN_STORAGE` overrides.
 - MCP config is **trusted code execution**: stdio servers run whatever

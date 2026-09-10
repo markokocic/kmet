@@ -1,7 +1,17 @@
 (ns kmet.app.packages
-  "Package manager (pi: core/package-manager.ts + the package part of
-   core/resource-loader.ts — the local directory/file source subset; npm and
-   git installs are deliberately out of scope, see alignment.md).
+  "Package manager + resource resolution (pi: core/package-manager.ts + the
+   package part of core/resource-loader.ts — the local directory/file source
+   subset; npm and git installs are deliberately out of scope, see
+   alignment.md).
+
+   `resolve-package-items` is pi's full resolve pipeline: top-level settings
+   resource entries (`:extensions`/`:skills`/`:prompts`/`:themes` — plain
+   paths expand, `!glob`/`+path`/`-path` patterns filter), the fixed
+   auto-dir scans (agent dir + .kmet), then packages, accumulated in pi's
+   insertion order and finalized with pi's precedence sort (project-local 0,
+   project-auto 1, user-local 2, user-auto 3, package 4) + canonical-path
+   dedupe. `load-extensions!`/`load-skills!`/`load-prompts!`/`load-themes!`
+   load the enabled items of a type.
 
    A package is a `:packages` entry in the global settings.edn
    (~/.kmet/agent/settings.edn, scope :user) or the project settings.edn
@@ -540,41 +550,14 @@
 ;; same ones the directory loaders use.
 
 (defn- discover-items-in-dir
-  "All item paths of TYPE inside container dir D."
+  "All item paths of TYPE inside container dir D (pi:
+   collectResourceFiles — the same walkers the directory loaders use)."
   [type d]
   (case type
     :extensions (extensions/extension-artifact-paths d)
     :skills (skills/discover-skill-files d)
     :prompts (prompts/prompt-template-files-in-dir d)
     :themes (vec (or (theme/theme-files-in-dir d) []))))
-
-(defn- discover-package-dir
-  "pi collectPackageResources — resource items of a local package
-   directory. Returns {type [absolute item paths]}: the conventional
-   extensions/ skills/ prompts/ themes/ subdirectories when any exist,
-   otherwise the directory itself as an extension container. A directory
-   with an extension.edn manifest is one extension and is handled by the
-   caller."
-  [root]
-  (let [subdirs (into {}
-                      (for [t resource-types
-                            :let [d (str (io/file root (name t)))]
-                            :when (fs/directory? d)]
-                        [t d]))]
-    (if (seq subdirs)
-      (into {} (for [[t d] subdirs] [t (discover-items-in-dir t d)]))
-      {:extensions (extensions/extension-artifact-paths root)})))
-
-(defn- enabled-paths
-  "pi applyPackageFilter/collectDefaultResources — PATTERNS nil = every
-   PATH; an empty array disables all of the type; otherwise pi's 4-step
-   pattern application relative to BASE-DIR (the package root). Returns the
-   enabled path set."
-  [paths patterns base-dir]
-  (cond
-    (nil? patterns) (set paths)
-    (empty? patterns) #{}
-    :else (apply-patterns paths patterns base-dir)))
 
 ;; ─── Resolution (pi: resolvePackageSources + toResolvedPaths) ─────────────
 
@@ -619,17 +602,146 @@
                 (recur (rest remaining) result seen)))))
         result))))
 
+(defn- resource-rank
+  "pi resourcePrecedenceRank — lower rank wins: 0 project + settings entry,
+   1 project + auto-discovered, 2 user + settings entry, 3 user +
+   auto-discovered, 4 package resource."
+  [item]
+  (let [{:keys [origin scope source]} (:metadata item)]
+    (if (= :package origin)
+      4
+      (+ (if (= :project scope) 0 2)
+         (if (= "local" source) 0 1)))))
+
 (defn- add-resource!
-  "Accumulate one resolved resource (pi: addResource — first add wins per
-   canonical path; insertion order is preserved per type)."
+  "Accumulate one resolved resource (pi: addResource — first add wins for a
+   given path string, insertion order kept; the finalize pass then applies
+   pi's rank sort + canonical dedupe across all layers)."
   [acc type item]
   (let [by-type (get @acc type)
-        key (canonicalize (:path item))]
+        key (str (:path item))]
     (when-not (contains? (:items by-type) key)
       (swap! acc update type
              (fn [t] (-> t
                          (assoc-in [:items key] item)
                          (update :order conj key)))))))
+
+(defn- finalize-items
+  "pi toResolvedPaths for one type: stable-sort the accumulated items by
+   precedence rank, then dedupe by canonical path (first wins). Sorting is
+   stable, so equal-rank items keep their layer insertion order."
+  [{:keys [order items]}]
+  (let [sorted (sort-by resource-rank (map items order))
+        {result :result}
+        (reduce (fn [{:keys [seen] :as acc} item]
+                  (let [k (canonicalize (:path item))]
+                    (if (contains? seen k)
+                      acc
+                      (-> acc
+                          (update :seen conj k)
+                          (update :result conj item)))))
+                {:seen #{} :result []}
+                sorted)]
+    (vec result)))
+
+(defn- collect-files-from-paths
+  "pi collectFilesFromPaths — PATHS (files and/or directories) expanded to
+   item paths of TYPE: a file contributes itself, a directory contributes
+   its discovered items. Missing paths are skipped."
+  [paths type]
+  (vec (mapcat (fn [p]
+                 (cond
+                   (fs/regular-file? p) [(str p)]
+                   (fs/directory? p) (discover-items-in-dir type (str p))
+                   :else []))
+               paths)))
+
+(defn- pattern-entry?
+  "pi isPattern — an entry carrying glob/override syntax (`*`, `?`, or a
+   `!`/`+`/`-` prefix) as opposed to a plain path."
+  [entry]
+  (let [s (str entry)]
+    (or (str/starts-with? s "!")
+        (str/starts-with? s "+")
+        (str/starts-with? s "-")
+        (str/includes? s "*")
+        (str/includes? s "?"))))
+
+(defn- enabled-by-overrides?
+  "pi isEnabledByOverrides — auto-dir enabled state: `!` globs exclude,
+   `+` exact paths force-include, `-` exact paths force-exclude; the set
+   starts enabled. Only override entries participate — plain includes are
+   ignored (auto dirs have no narrowing step). pi applies the checks in
+   sequence (exclude → force-include → force-exclude), so a later check
+   wins: `+` overrides `!`, `-` overrides `+`."
+  [path patterns base-dir]
+  (let [patterns (mapv str patterns)
+        excludes (mapv #(subs % 1) (filterv #(str/starts-with? % "!") patterns))
+        force-includes (mapv #(subs % 1) (filterv #(str/starts-with? % "+") patterns))
+        force-excludes (mapv #(subs % 1) (filterv #(str/starts-with? % "-") patterns))]
+    (cond
+      (and (seq force-excludes) (matches-any-exact-pattern? force-excludes path base-dir)) false
+      (and (seq force-includes) (matches-any-exact-pattern? force-includes path base-dir)) true
+      (and (seq excludes) (matches-any-pattern? excludes path base-dir)) false
+      :else true)))
+
+(defn- resolve-local-entries
+  "pi resolveLocalEntries — top-level settings ENTRIES of TYPE into items:
+   plain entries resolve against BASE-DIR and expand to files (a file
+   contributes itself, a directory its discovered items); the collected
+   files are then filtered by the pattern entries via apply-patterns
+   (plain includes narrow, `!`/`+`/`-` adjust). Items carry origin
+   :top-level, source \"local\"."
+  [acc type entries metadata base-dir]
+  (let [entries (mapv str (or entries []))
+        {:keys [plain patterns]} (group-by #(if (pattern-entry? %) :patterns :plain) entries)
+        resolved (mapv #(resolve-path % base-dir) (or plain []))
+        files (collect-files-from-paths resolved type)
+        ;; pi's pattern stage: only the override/glob entries filter the
+        ;; collected files — plain entries are not includes.
+        enabled (apply-patterns files patterns base-dir)]
+    (doseq [path files]
+      (add-resource! acc type
+                     (->PackageItem path (contains? enabled path) type metadata)))))
+
+(defn- resolve-auto-dir
+  "pi addAutoDiscoveredResources (one dir) — discovered items of TYPE in
+   DIR with override-only enabled state from the same-type top-level
+   entries (isEnabledByOverrides against BASE-DIR, the scope root). Items
+   carry origin :top-level, source \"auto\"."
+  [acc type dir metadata base-dir overrides]
+  (doseq [path (discover-items-in-dir type dir)]
+    (add-resource! acc type
+                   (->PackageItem path (enabled-by-overrides? path overrides base-dir)
+                                  type metadata))))
+
+(defn- discover-package-dir
+  "pi collectPackageResources — resource items of a local package
+   directory. Returns {type [absolute item paths]}: the conventional
+   extensions/ skills/ prompts/ themes/ subdirectories when any exist,
+   otherwise the directory itself as an extension container. A directory
+   with an extension.edn manifest is one extension and is handled by the
+   caller."
+  [root]
+  (let [subdirs (into {}
+                      (for [t resource-types
+                            :let [d (str (io/file root (name t)))]
+                            :when (fs/directory? d)]
+                        [t d]))]
+    (if (seq subdirs)
+      (into {} (for [[t d] subdirs] [t (discover-items-in-dir t d)]))
+      {:extensions (extensions/extension-artifact-paths root)})))
+
+(defn- enabled-paths
+  "pi applyPackageFilter/collectDefaultResources — PATTERNS nil = every
+   PATH; an empty array disables all of the type; otherwise pi's 4-step
+   pattern application relative to BASE-DIR (the package root). Returns the
+   enabled path set."
+  [paths patterns base-dir]
+  (cond
+    (nil? patterns) (set paths)
+    (empty? patterns) #{}
+    :else (apply-patterns paths patterns base-dir)))
 
 (defn- resolve-local-entry
   "Resolve one local package entry into items (pi:
@@ -672,113 +784,172 @@
               (add-resource! acc type
                              (->PackageItem path (get states path) type metadata)))))))))
 
+(defn- top-level-metadata
+  "Item metadata for top-level settings resources (pi: PathMetadata with
+   origin \"top-level\"): SOURCE is \"local\" (explicit settings entry)
+   or \"auto\" (auto-dir scan); BASE-DIR is the scope root the entry
+   patterns resolve against."
+  [source scope base-dir]
+  {:scope scope :origin :top-level :source source :base-dir base-dir})
+
+(defn- resolve-top-level-layer
+  "pi resolve (the top-level part), in pi's insertion order: project
+   settings entries, user settings entries, then auto-dir scans (project
+   before user). The precedence sort happens once in finalize-items.
+   PROJECT-SCOPE? false is pi's global config view (untrusted settings
+   manager): project entries and project auto dirs are skipped entirely."
+  [acc user-settings project-settings agent-dir project-scope?]
+  (let [user-settings (or user-settings {})
+        project-settings (or project-settings {})
+        project-base (cfg/project-dir)
+        user-base (or agent-dir (cfg/get-agent-dir))]
+    (when project-scope?
+      (doseq [type resource-types]
+        (resolve-local-entries acc type (get project-settings type)
+                               (top-level-metadata "local" :project project-base)
+                               project-base)))
+    (doseq [type resource-types]
+      (resolve-local-entries acc type (get user-settings type)
+                             (top-level-metadata "local" :user user-base)
+                             user-base))
+    ;; Scope is decided by exact root equality, not path prefix: the agent
+    ;; dir can live inside the project root (cwd = $HOME puts the agent at
+    ;; $HOME/.kmet/agent under the project root $HOME/.kmet), and a prefix
+    ;; test would mislabel every user auto root as project scope.
+    (doseq [project? (if project-scope? [true false] [false])
+            type resource-types
+            :let [scope-base (if project? project-base user-base)
+                  root (str (fs/path scope-base (name type)))]
+            d (cfg/auto-resource-dirs type agent-dir)
+            :when (= (str d) root)]
+      (resolve-auto-dir acc type d
+                        (top-level-metadata "auto" (if project? :project :user)
+                                            scope-base)
+                        scope-base
+                        (get (if project? project-settings user-settings) type)))))
+
 (defn resolve-package-items
-  "Resolve the configured packages of USER-SETTINGS and PROJECT-SETTINGS
-   (settings maps or nil) into per-type PackageItem vectors (pi: resolve —
-   the packages part; kmet's auto resource dirs load separately and are not
-   part of this model). Order: project packages first, then user packages;
-   first-wins per canonical path."
-  [user-settings project-settings]
-  (let [entries (concat (for [entry (packages-of (or project-settings {}))]
-                          {:entry entry :scope :project})
-                        (for [entry (packages-of (or user-settings {}))]
-                          {:entry entry :scope :user}))
-        acc (atom (into {} (for [type resource-types]
-                             [type {:order [] :items {}}])))]
-    (doseq [{:keys [entry scope]} (dedupe-entries entries)
-            :let [source (source-of entry)
-                  parsed (parse-source source)]]
-      (if (= :remote (:kind parsed))
-        (binding [*out* *err*]
-          (println "Warning: package" source "is a remote source; kmet supports"
-                   "local directories and files only — skipping"))
-        (let [delta? (and (= scope :project) (autoload-disabled? entry))
-              ;; pi findAutoloadDeltaBase: a delta entry resolves its path
-              ;; from the user entry of the same identity; without one it
-              ;; resolves against its own scope like any other entry
-              delta-base (when delta?
-                           (some (fn [{:keys [entry scope]}]
-                                   (when (and (= scope :user)
-                                              (= (package-identity (source-of entry) :user)
-                                                 (package-identity source :project)))
-                                     (source-of entry)))
-                                 entries))
-              resolved (resolve-source-path (or delta-base source)
-                                            (if delta-base :user scope))]
-          (when (fs/exists? resolved)
-            (resolve-local-entry acc resolved entry scope source)))))
-    (into {} (for [[type {:keys [order items]}] @acc]
-               [type (mapv items order)]))))
+  "Resolve USER-SETTINGS and PROJECT-SETTINGS (settings maps or nil) into
+   per-type PackageItem vectors (pi: resolve — top-level settings entries,
+   auto-dir scans, then packages). Insertion order is pi precedence
+   (project-local > project-auto > user-local > user-auto > packages);
+   first-wins per canonical path. AGENT-DIR pins the user scope root
+   (KMET_CODING_AGENT_DIR sandboxing); nil resolves via cfg/get-agent-dir.
+   PROJECT-SCOPE? false resolves the user scope only — pi's global config
+   view (SettingsManager untrusted: no project settings, no project auto
+   scans)."
+  ([user-settings project-settings] (resolve-package-items user-settings project-settings nil true))
+  ([user-settings project-settings agent-dir] (resolve-package-items user-settings project-settings agent-dir true))
+  ([user-settings project-settings agent-dir project-scope?]
+   (let [user-settings (or user-settings {})
+         ;; PROJECT-SCOPE? false ignores project settings outright — the
+         ;; caller may still pass the file map (read-views does)
+         project-settings (if project-scope? (or project-settings {}) {})
+         entries (concat (for [entry (packages-of project-settings)]
+                           {:entry entry :scope :project})
+                         (for [entry (packages-of user-settings)]
+                           {:entry entry :scope :user}))
+         acc (atom (into {} (for [type resource-types]
+                              [type {:order [] :items {}}])))]
+     (resolve-top-level-layer acc user-settings project-settings agent-dir project-scope?)
+     (doseq [{:keys [entry scope]} (dedupe-entries entries)
+             :let [source (source-of entry)
+                   parsed (parse-source source)]]
+       (if (= :remote (:kind parsed))
+         (binding [*out* *err*]
+           (println "Warning: package" source "is a remote source; kmet supports"
+                    "local directories and files only — skipping"))
+         (let [delta? (and (= scope :project) (autoload-disabled? entry))
+               ;; pi findAutoloadDeltaBase: a delta entry resolves its path
+               ;; from the user entry of the same identity; without one it
+               ;; resolves against its own scope like any other entry
+               delta-base (when delta?
+                            (some (fn [{:keys [entry scope]}]
+                                    (when (and (= scope :user)
+                                               (= (package-identity (source-of entry) :user)
+                                                  (package-identity source :project)))
+                                      (source-of entry)))
+                                  entries))
+               resolved (resolve-source-path (or delta-base source)
+                                             (if delta-base :user scope))]
+           (when (fs/exists? resolved)
+             (resolve-local-entry acc resolved entry scope source)))))
+     (into {} (for [[type {:keys [order items]}] @acc]
+                [type (finalize-items {:order order :items items})])))))
 
 (defn resolve-configured-packages
   "Resolve the configured packages read from both settings files (the
-   merged user + project view, pi: the project-trusted resolve)."
-  []
-  (resolve-package-items (user-settings-map) (project-settings-map)))
+   merged user + project view, pi: the project-trusted resolve). Now the
+   unified resolution — top-level entries and auto-dir scans included — so
+   the loaders below see every layer; AGENT-DIR pins the user scope root
+   (KMET_CODING_AGENT_DIR sandboxing)."
+  ([] (resolve-configured-packages nil))
+  ([agent-dir]
+   (resolve-package-items (user-settings-map) (project-settings-map) agent-dir)))
 
-(defn resolve-user-packages
-  "Resolve only the user-scope packages from the global settings file (pi:
-   resolve with global-only settings — the pi config command's global
-   view)."
-  []
-  (resolve-package-items (user-settings-map) nil))
-
-;; ─── Loading (pi: resource-loader package resources) ──────────────────────
+;; ─── Loading (pi: resource-loader — the unified resolution) ───────────────
+;; Every layer (top-level entries, auto dirs, packages) resolves into one
+;; ordered view, so loading is a single enabled-path pass per type — no
+;; separate auto/package phases and no cross-phase dedupe. Registries still
+;; dedupe by identity (extension path, skill name, ...) so a second load
+;; call (print mode, /reload) only adds what is new.
 
 (defn- enabled-item-paths
-  "Enabled item paths of TYPE from a resolved view, minus items whose
-   canonical path is already loaded from the auto resource dirs (pi:
-   toResolvedPaths dedupes canonical paths and auto resources outrank
-   packages — kmet's auto dirs load first, so those must not double-load)."
-  [resolved type already-loaded]
+  "Enabled item paths of TYPE from a resolved view."
+  [resolved type]
   (->> (get resolved type)
        (filter :enabled)
-       (remove (fn [item] (contains? already-loaded (canonicalize (:path item)))))
        (mapv :path)))
 
-(defn load-package-extensions!
-  "Load the enabled package extension items that are not already loaded
-   from the resource dirs. Returns the per-extension results of the new
-   loads ({:extension name :error} maps, failures also warn — same shape as
-   load-extensions-from-dir)."
-  []
-  (let [loaded (set (map (comp canonicalize :path) (extensions/registered-extensions)))]
-    (extensions/load-extension-paths!
-     (enabled-item-paths (resolve-configured-packages) :extensions loaded))))
+(defn load-extensions!
+  "Load every enabled extension in the unified resolution (top-level
+   entries, auto dirs, packages — pi precedence, first-wins per canonical
+   path). Returns the per-extension results of the new loads ({:extension
+   name :error} maps, failures also warn — same shape as
+   load-extensions-from-dir). AGENT-DIR pins the user scope root."
+  ([] (load-extensions! nil))
+  ([agent-dir]
+   (let [loaded (set (map (comp canonicalize :path) (extensions/registered-extensions)))
+         paths (remove #(contains? loaded (canonicalize %))
+                       (enabled-item-paths (resolve-configured-packages agent-dir) :extensions))]
+     (extensions/load-extension-paths! (vec paths)))))
 
-(defn load-package-skills!
-  "Load the enabled package skill items that are not already loaded from
-   the resource dirs (dedupe by file path — dir-loaded skills register
-   their file path)."
-  []
-  (let [loaded (into #{} (keep :file-path) (skills/get-skills))
-        paths (enabled-item-paths (resolve-configured-packages) :skills loaded)]
-    (skills/load-skills-from-files! paths)))
+(defn load-skills!
+  "Load every enabled skill in the unified resolution (first-wins by name
+   in the registry). AGENT-DIR pins the user scope root."
+  ([] (load-skills! nil))
+  ([agent-dir]
+   (let [loaded (into #{} (keep :file-path) (skills/get-skills))
+         paths (remove #(contains? loaded %) (enabled-item-paths (resolve-configured-packages agent-dir) :skills))]
+     (skills/load-skills-from-files! (vec paths)))))
 
-(defn load-package-prompts!
-  "Load the enabled package prompt items that are not already loaded from
-   the resource dirs (dedupe by file path)."
-  []
-  (let [loaded (into #{} (keep :file-path) (prompts/get-prompt-templates))
-        paths (enabled-item-paths (resolve-configured-packages) :prompts loaded)]
-    (prompts/load-prompt-template-files! paths)))
+(defn load-prompts!
+  "Load every enabled prompt template in the unified resolution.
+   AGENT-DIR pins the user scope root."
+  ([] (load-prompts! nil))
+  ([agent-dir]
+   (let [loaded (into #{} (keep :file-path) (prompts/get-prompt-templates))
+         paths (remove #(contains? loaded %) (enabled-item-paths (resolve-configured-packages agent-dir) :prompts))]
+     (prompts/load-prompt-template-files! (vec paths)))))
 
-(defn load-package-themes!
-  "Register the enabled package theme items that are not already loaded
-   from the theme dir (dedupe by source path)."
-  []
-  (let [loaded (into #{} (keep :source-path) (vals (theme/get-all-themes)))
-        paths (enabled-item-paths (resolve-configured-packages) :themes loaded)]
-    (theme/load-theme-paths! paths)))
+(defn load-themes!
+  "Register every enabled theme in the unified resolution. AGENT-DIR pins
+   the user scope root."
+  ([] (load-themes! nil))
+  ([agent-dir]
+   (let [loaded (into #{} (keep :source-path) (vals (theme/get-all-themes)))
+         paths (remove #(contains? loaded %) (enabled-item-paths (resolve-configured-packages agent-dir) :themes))]
+     (theme/load-theme-paths! (vec paths)))))
 
-;; ─── Config model (pi: config-selector.ts — package resources) ────────────
-;; The resource-config TUI (kmet config) toggles package resources. kmet
-;; lists package-origin resources only — the auto resource dirs are managed
-;; as files and top-level settings resource entries are not ported (see
-;; alignment.md). Toggle writes follow pi exactly: per-type +/- patterns on
-;; the package's settings entry, object-entry conversion, and — in project
-;; scope — :autoload false delta entries for inherited user packages with
-;; an inherit/load/unload tri-state cycle.
+;; ─── Config model (pi: config-selector.ts) ─────────────────────────────────
+;; The resource-config TUI (kmet config) toggles resources across all layers
+;; (top-level entries, auto dirs, packages — pi buildGroups over the unified
+;; resolution, packages first). Package toggle writes follow pi exactly:
+;; per-type +/- patterns on the package's settings entry, object-entry
+;; conversion, and — in project scope — :autoload false delta entries for
+;; inherited user packages with an inherit/load/unload tri-state cycle.
+;; Top-level items write +/- patterns into the scope's settings resource
+;; array instead (pi toggleTopLevelResource / setProjectTopLevelOverride).
 
 (def resource-type-labels
   "pi RESOURCE_TYPE_LABELS."
@@ -905,27 +1076,135 @@
       :else
       (assoc packages idx (:source entry)))))
 
+(defn top-level-item?
+  "True when ITEM comes from a top-level settings entry or an auto-dir
+   scan (pi: metadata.origin === \"top-level\"), as opposed to a package."
+  [item]
+  (= :top-level (get-in item [:metadata :origin])))
+
+(defn top-level-base-dir
+  "pi getTopLevelBaseDir — the scope root top-level patterns of SCOPE
+   resolve against: the agent dir for user items, the .kmet project dir
+   for project items."
+  [scope]
+  (if (= scope :project) (cfg/project-dir) (cfg/get-agent-dir)))
+
+(defn top-level-pattern
+  "pi getResourcePatternForScope (same-scope case) — ITEM's path relative
+   to its scope root (its metadata base-dir, falling back to the scope
+   root when absent). relative-posix mirrors pi's path.relative (a dot for
+   the base itself, the absolute path for unrelated roots — Windows
+   drives)."
+  [item]
+  (let [base (or (get-in item [:metadata :base-dir])
+                 (top-level-base-dir (get-in item [:metadata :scope] :user)))]
+    (relative-posix base (:path item))))
+
+(defn top-level-override-patterns
+  "pi getTopLevelOverridePatterns — every pattern form that can target
+   ITEM in SCOPE: relative to the scope root, the absolute path, and
+   relative to the item's own base dir. Built with set — the forms can
+   evaluate to the same string (a project item's base dir IS the project
+   scope root), and a set literal with duplicate evaluated elements throws
+   on babashka/SCI."
+  [item scope]
+  (let [base (top-level-base-dir scope)
+        patterns (set [(top-level-pattern item)
+                       (posix (:path item))
+                       (relative-posix base (:path item))])]
+    (cond-> patterns
+      (get-in item [:metadata :base-dir])
+      (conj (relative-posix (get-in item [:metadata :base-dir]) (:path item))))))
+
+(defn- top-level-array-of
+  "The settings resource array of TYPE in scope SCOPE's settings map."
+  [type scope]
+  (vec (or (get (if (= scope :project) (project-settings-map) (user-settings-map)) type) [])))
+
+(defn apply-top-level-toggle!
+  "pi toggleTopLevelResource — flip ITEM's enabled state by writing
+   +/−PATTERN (relative to the scope root) into the scope's settings
+   resource array for the item's type. Existing entries targeting the same
+   pattern are replaced. Always true (the array always exists)."
+  [item enabled]
+  (let [scope (get-in item [:metadata :scope] :user)
+        type (:resource-type item)
+        pattern (top-level-pattern item)
+        current (top-level-array-of type scope)
+        filtered (filterv #(not= (pattern-target %) pattern) current)
+        updated (conj filtered (str (if enabled "+" "-") pattern))
+        save! (if (= scope :project) cfg/save-project-setting! cfg/save-setting!)]
+    (save! [type] updated)
+    true))
+
+(defn top-level-override-state-of
+  "pi getProjectOverrideState (top-level branch) — ITEM's project override
+   state from the project settings resource array."
+  [item]
+  (let [array (top-level-array-of (:resource-type item) :project)
+        patterns (top-level-override-patterns item :project)]
+    (reduce (fn [state entry]
+              (if (contains? patterns (pattern-target entry))
+                (if (or (str/starts-with? (str entry) "-")
+                        (str/starts-with? (str entry) "!"))
+                  :unload
+                  :load)
+                state))
+            :inherit
+            array)))
+
+(defn apply-project-top-level-override!
+  "pi setProjectTopLevelOverride — set ITEM's project override STATE
+   (:inherit/:load/:unload) in the project settings resource array. An
+   inherited user item writes its absolute path plus the +/- pattern;
+   :inherit removes the override entries again. Always true."
+  [item state]
+  (let [type (:resource-type item)
+        inherited? (= :user (get-in item [:metadata :scope] :user))
+        pattern (if inherited? (posix (:path item)) (top-level-pattern item))
+        patterns (top-level-override-patterns item :project)
+        current (top-level-array-of type :project)
+        override? #(or (str/starts-with? (str %) "!")
+                       (str/starts-with? (str %) "+")
+                       (str/starts-with? (str %) "-"))
+        filtered (filterv (fn [entry]
+                            (let [target (pattern-target entry)]
+                              (not (or (and (override? entry) (contains? patterns target))
+                                       (and (= state :inherit) inherited? (= target pattern))))))
+                          current)
+        updated (if (not= state :inherit)
+                  (let [with-plain (if (and inherited? (not (some #(= % pattern) filtered)))
+                                     (conj filtered pattern)
+                                     filtered)]
+                    (conj with-plain (str (if (= state :load) "+" "-") pattern)))
+                  filtered)]
+    (cfg/save-project-setting! [type] updated)
+    true))
+
 (defn apply-global-toggle!
-  "pi togglePackageResource on the user settings file: flip ITEM's enabled
-   state by writing +/−PATTERN into the matching package entry (string
-   entries become object entries; entries with no remaining filters return
-   to strings). No-op when the package is not found, and false for
+  "pi toggleResource (global branch) — flip ITEM's enabled state. Package
+   items write +/−PATTERN into the matching package entry (string entries
+   become object entries; entries with no remaining filters return to
+   strings); top-level items write into the scope's settings resource
+   array. No-op when the package is not found, and false for
    single-extension sources — their filters are ignored at resolve time,
    so a pattern write would silently do nothing."
   [item enabled]
-  (if (single-extension-item? item)
-    false
-    (let [current (user-packages)
-          source (get-in item [:metadata :source])
-          idx (first (keep-indexed (fn [i e]
-                                     (when (= (source-of e) source) i))
-                                   current))]
-      (when idx
-        (cfg/save-setting!
-         [:packages]
-         (set-type-array! current idx (:resource-type item) (item-pattern item)
-                          (if enabled :load :unload)))
-        true))))
+  (if (top-level-item? item)
+    (apply-top-level-toggle! item enabled)
+    (if (single-extension-item? item)
+      false
+      (let [current (user-packages)
+            source (get-in item [:metadata :source])
+            idx (first (keep-indexed (fn [i e]
+                                       (when (= (source-of e) source) i))
+                                     current))]
+        (when idx
+          (cfg/save-setting!
+           [:packages]
+           (set-type-array! current idx (:resource-type item) (item-pattern item)
+                            (if enabled :load :unload)))
+          true)))))
 
 (defn- override-source-entry
   "pi createPackageOverrideSource — a project-scope delta entry over the
@@ -939,32 +1218,36 @@
      :autoload false}))
 
 (defn apply-project-override!
-  "pi setProjectPackageOverride — set ITEM's project override STATE
-   (:inherit/:load/:unload) in the project settings file. Inherited user
-   packages without a project entry get a fresh :autoload false delta
-   entry; cycling back to :inherit removes the override again. False for
+  "pi setProjectResourceOverride — set ITEM's project override STATE
+   (:inherit/:load/:unload) in the project settings file. Top-level items
+   write into the project settings resource array; package items write
+   +/−patterns into the project :packages entry (inherited user packages
+   without a project entry get a fresh :autoload false delta entry;
+   cycling back to :inherit removes the override again). False for
    single-extension sources (their filters are ignored at resolve time)."
   [item state]
-  (if (single-extension-item? item)
-    false
-    (when (not= state (override-state-of item (project-packages)))
-      (let [current (project-packages)
-            item-scope (get-in item [:metadata :scope] :user)
-            idx (first (keep-indexed (fn [i e]
-                                       (when (source-matches-scope (source-of e) :project
-                                                                   (get-in item [:metadata :source])
-                                                                   item-scope)
-                                         i))
-                                     current))]
-        (if (and (nil? idx) (= state :inherit))
-          false
-          (let [packages (if idx
-                           current
-                           (conj current (override-source-entry item)))
-                idx (or idx (dec (count packages)))]
-            (cfg/save-project-setting! [:packages]
-                                       (set-type-array! packages idx
-                                                        (:resource-type item)
-                                                        (item-pattern item)
-                                                        state))
-            true))))))
+  (if (top-level-item? item)
+    (apply-project-top-level-override! item state)
+    (if (single-extension-item? item)
+      false
+      (when (not= state (override-state-of item (project-packages)))
+        (let [current (project-packages)
+              item-scope (get-in item [:metadata :scope] :user)
+              idx (first (keep-indexed (fn [i e]
+                                         (when (source-matches-scope (source-of e) :project
+                                                                     (get-in item [:metadata :source])
+                                                                     item-scope)
+                                           i))
+                                       current))]
+          (if (and (nil? idx) (= state :inherit))
+            false
+            (let [packages (if idx
+                             current
+                             (conj current (override-source-entry item)))
+                  idx (or idx (dec (count packages)))]
+              (cfg/save-project-setting! [:packages]
+                                         (set-type-array! packages idx
+                                                          (:resource-type item)
+                                                          (item-pattern item)
+                                                          state))
+              true)))))))

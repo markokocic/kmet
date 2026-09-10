@@ -5,7 +5,7 @@
    machinery in kmet.libs.oauth).
 
    Thin adapter: server config → lib calls, token-store file wiring
-   (~/.kmet/agent/mcp-oauth.edn, plaintext with 0600 perms — bb has no OS
+   (<agent-dir>/mcp-oauth.edn, plaintext with 0600 perms — bb has no OS
    keyring; documented tradeoff; pi uses the keyring), browser open,
    status text. The extension cannot require kmet.ai.*, so the generic
    machinery lives in kmet.libs.oauth (RFC 8414 discovery, RFC 7591 DCR,
@@ -25,6 +25,7 @@
             [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [extensions.mcp-adapter.config :as config]
             [kmet.libs.oauth :as oauth-lib]))
 
 (defn- read-text
@@ -39,7 +40,7 @@
 ;; ─── Token store ──────────────────────────────────────────────────────────
 ;; Two backends, selected by settings :token-storage (or the MCP_TOKEN_STORAGE
 ;; env override):
-;;   :file    — ~/.kmet/agent/mcp-oauth.edn, plaintext with 0600 perms
+;;   :file    — <agent-dir>/mcp-oauth.edn, plaintext with 0600 perms
 ;;              (Phase 1 behavior; the only backend on Termux/Android and
 ;;              on hosts without a keyring tool)
 ;;   :keyring — the OS credential store via platform tools: macOS `security`
@@ -68,10 +69,10 @@
     (reset! storage-mode (if (contains? #{:auto :keyring :file} mode) mode :auto))))
 
 (defn store-path
-  "The plaintext OAuth token store file (the :file backend; keyring mode
-   stores per-server secrets instead)."
+  "The plaintext OAuth token store file (<agent-dir>/mcp-oauth.edn; the
+   :file backend — keyring mode stores per-server secrets instead)."
   []
-  (str (fs/home) "/.kmet/agent/mcp-oauth.edn"))
+  (str (fs/path (config/agent-dir) "mcp-oauth.edn")))
 
 (defn- read-edn
   [path]

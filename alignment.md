@@ -27,11 +27,23 @@ provider streaming + dynamic model refresh).
 | Package sources: npm/git | `npm:`/`git:` installs (npm registry + git clone machinery in `core/package-manager.ts`), `pi update`/self-update, temporary `--extension` installs, per-package autoload deltas over npm/git identities | Not ported — kmet packages are local files/directories only (`kmet install ./dir`, `~`, absolute, relative; anything else errors with "Unsupported package source"). The remainder of the package manager IS ported (next section) |
 | Session interop / JSONL | pi JSONL session files, `/export` `.jsonl`, `--export` from JSONL | EDNL-only by design (see `session.md`) — `/export` writes standalone HTML |
 
-## Ported: the local-source package manager (`kmet install/remove/list/config`)
+## Ported: the resource resolution & local-source package manager
 
-pi `core/package-manager.ts` + `package-manager-cli.ts` + `cli/config-selector.ts`
+pi `core/package-manager.ts` (the full resolve pipeline) +
+`package-manager-cli.ts` + `cli/config-selector.ts`
 → `kmet.app.packages` + `kmet.package-manager` + `kmet.app.ui.resource-config`
 (+ the runner call sites in `core.clj`, `modes/interactive.clj`, `modes/print.clj`).
+
+`PackageManager.resolve()` is fully ported: top-level settings resource
+entries (`:extensions`/`:skills`/`:prompts`/`:themes`, plain paths plus
+`!glob`/`+path`/`-path` patterns), the fixed auto-dir scans
+(`~/.kmet/agent/<type>` + `.kmet/<type>`), and `:packages`, all into pi's
+insertion order (project-local → user-local → project-auto → user-auto →
+packages) with pi's `toResolvedPaths` finalization — a stable sort by
+`resourcePrecedenceRank` (project-local 0, project-auto 1, user-local 2,
+user-auto 3, package 4) then dedupe by canonical path, first wins. Loading
+is one unified enabled-path pass per type (`load-extensions!` /
+`load-skills!` / `load-prompts!` / `load-themes!`).
 Sources are local **files** (load as one extension) or **directories**
 (one `extension.edn` extension, or conventional `extensions/` `skills/`
 `prompts/` `themes/` subdirectories, or a bare dir as an extension container).
@@ -49,11 +61,13 @@ Object entries are fully supported with pi's semantics:
 (plain globs include, `!glob` excludes, `+path`/`-path` exact force
 include/exclude, `[]` disables all of a type, absent key loads all) and
 project entries with `:autoload false` apply as deltas over the global entry
-of the same identity. Resolution order/dedupe mirrors pi (project wins;
-delta pairs apply first; first-wins per canonical path; filtered-out items
+of the same identity. Top-level entries split into plain paths (resolved
+and expanded — a file loads itself, a directory its discovered items) and
+pattern entries (filter the collected files; auto-dir items are adjusted by
+`!`/`+`/`-` overrides only, pi `isEnabledByOverrides`). Filtered-out items
 stay in the resolution with `:enabled false` so the config list can
-re-enable them). Configured packages load after the auto resource dirs at
-startup, in print mode, and on `/reload`.
+re-enable them. Everything loads at startup, in print mode, and on
+`/reload`.
 
 Kmet adaptations (deliberate deviations):
 
@@ -69,11 +83,18 @@ Kmet adaptations (deliberate deviations):
 - Pattern matching implements minimatch's common subset (`*`, `?`, `**`,
   `[...]`; no extglobs/braces) against the same match forms as pi (relative
   path, file name, absolute path; skills also match their parent folder).
-- `config` lists **package resources only**: kmet has no top-level settings
-  resource entries (`settings.extensions` etc.) and its auto resource dirs
-  stay file-managed (pi's top-level/auto groups are omitted). Filter writes
-  target the package's own entry only. Project mode is available whenever
-  `.kmet/` exists or `-l` was passed (no trust gate).
+- `config` lists all layers (pi buildGroups: packages first, then
+  top-level groups, user before project). Package items toggle via the
+  package's settings entry; top-level/auto items toggle via the scope's
+  settings resource array (pi toggleTopLevelResource /
+  setProjectTopLevelOverride, including the inherited-global absolute-path
+  entry). Project mode is available whenever `.kmet/` exists or `-l` was
+  passed (no trust gate).
+- No configurable resource dirs: the auto roots are fixed
+  (`~/.kmet/agent/<type>` + `.kmet/<type>`, pi `join(agentDir, type)` +
+  `join(cwd, CONFIG_DIR_NAME, type)`); the retired `:*-dir` settings keys
+  warn at load and point at the top-level entries. The agent dir honors
+  `KMET_CODING_AGENT_DIR` (pi `ENV_AGENT_DIR`).
 - Remote (npm/git) entries in settings warn and are skipped at load instead
   of being auto-installed.
 - `pi update` (extension updates, model-catalog refresh, self-update) is not

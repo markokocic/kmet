@@ -6,8 +6,7 @@
             [babashka.fs :as fs]
             [kmet.ai.models :as m]
             [kmet.ai.auth :as auth]
-            [kmet.libs.dynamic-value :as dynamic-value]
-            [kmet.ai.model-config :as model-config]))
+            [kmet.libs.dynamic-value :as dynamic-value]))
 
 ;; ─── Registry semantics (pi: MutableModels) ────────────────────────────────
 
@@ -340,8 +339,9 @@
 (t/deftest test-load-models-config!
   (m/load-catalogs!)
   (let [tmp (str (fs/absolutize (fs/file "target" (str "test-models-config-" (System/currentTimeMillis)))))
-        global (str tmp "/agent/models.edn")
-        project (str tmp "/project/models.edn")]
+        agent-dir (str tmp "/agent")
+        global (str agent-dir "/models.edn")
+        project (str tmp "/project/.kmet/models.edn")]
     (fs/create-dirs (fs/parent global))
     (fs/create-dirs (fs/parent project))
     (try
@@ -356,8 +356,8 @@
                                               :api-key \"sk-literal\"
                                               :models [{:id \"lit-1\"}]}}}\n")
       (spit project "{:providers {:my-custom {:name \"Custom Provider\"}}}\n")
-      (with-redefs [model-config/models-edn-paths (fn [] [global project])]
-        (m/load-models-config!))
+      (with-redefs [fs/cwd (fn [] (str tmp "/project"))]
+        (m/load-models-config! agent-dir))
       (t/testing "builtin + config providers recomposed; config-only provider added"
         (t/is (some? (m/get-provider :deepseek)))
         (t/is (some? (m/get-provider :my-custom)))
@@ -399,15 +399,19 @@
     (fs/create-dirs tmp)
     (try
       (spit path "{:providers {:deepseek {:base-url")
-      (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
-        (m/load-models-config!))
+      (let [agent-dir (str tmp "/agent")]
+        (fs/create-dirs agent-dir)
+        (fs/copy path (str agent-dir "/models.edn"))
+        (with-redefs [fs/cwd (fn [] tmp)]
+          (m/load-models-config! agent-dir)))
       (t/testing "parse failure → error surfaced, built-ins kept"
         (t/is (some? (m/get-model-config-error)))
         (t/is (= 40 (count (m/get-providers)))))
       (t/testing "composition failure falls back to the builtin provider"
         (spit path "{:providers {:broken {:models [{:id \"x\"}]}}}\n")
-        (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
-          (m/load-models-config!))
+        (fs/copy path (str tmp "/agent/models.edn") {:replace-existing true})
+        (with-redefs [fs/cwd (fn [] tmp)]
+          (m/load-models-config! (str tmp "/agent")))
         (t/is (some? (m/get-model-config-error)))
         (t/is (nil? (m/get-provider :broken)) "config-only provider that fails to compose is dropped")
         (t/is (some? (m/get-provider :deepseek)))
@@ -429,14 +433,18 @@
                                                :api :openai-completions
                                                :models [{:id \"t1\"}]}
                                :deepseek {:model-overrides {\"deepseek-v4-pro\" {:context-window 777}}}}}\n")
-      (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
-        (m/load-models-config!))
+      (let [agent-dir (str tmp "/agent")]
+        (fs/create-dirs agent-dir)
+        (fs/copy path (str agent-dir "/models.edn"))
+        (with-redefs [fs/cwd (fn [] tmp)]
+          (m/load-models-config! agent-dir)))
       (t/is (some? (m/get-provider :temp-provider)))
       (t/is (= 777 (:context-window (m/get-model :deepseek "deepseek-v4-pro"))))
       (t/testing "second load with temp-provider removed and override changed"
         (spit path "{:providers {:deepseek {:model-overrides {\"deepseek-v4-pro\" {:context-window 888}}}}}\n")
-        (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
-          (m/load-models-config!))
+        (fs/copy path (str tmp "/agent/models.edn") {:replace-existing true})
+        (with-redefs [fs/cwd (fn [] tmp)]
+          (m/load-models-config! (str tmp "/agent")))
         (t/is (nil? (m/get-provider :temp-provider)) "removed provider disappears on reload")
         (t/is (= 888 (:context-window (m/get-model :deepseek "deepseek-v4-pro"))) "override replaces the old value")
         (t/is (= 40 (count (m/get-providers))) "registry back to builtin count"))
@@ -454,8 +462,11 @@
     (try
       (spit path "{:providers {:custom {:base-url \"https://x/v1\" :api :openai-completions
                                         :models [{:id \"cm\"}]}}}\n")
-      (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
-        (m/load-models-config!))
+      (let [agent-dir (str tmp "/agent")]
+        (fs/create-dirs agent-dir)
+        (fs/copy path (str agent-dir "/models.edn"))
+        (with-redefs [fs/cwd (fn [] tmp)]
+          (m/load-models-config! agent-dir)))
       (t/is (= (class (m/get-model :opencode-go "deepseek-v4-flash"))
                (class (m/get-model :custom "cm")))
             "custom models are Model records like builtin ones")
@@ -620,8 +631,11 @@
     (try
       (let [orig-flash-cw (:context-window (m/get-model :deepseek "deepseek-v4-flash"))]
         (spit path "{:providers {:deepseek {:model-overrides {\"deepseek-v4-pro\" {:context-window 444}}}}}\n")
-        (with-redefs [model-config/models-edn-paths (fn [] [path (str path ".project")])]
-          (m/load-models-config!)
+        (let [agent-dir (str tmp "/agent")]
+          (fs/create-dirs agent-dir)
+          (fs/copy path (str agent-dir "/models.edn"))
+          (with-redefs [fs/cwd (fn [] tmp)]
+            (m/load-models-config! agent-dir))
           (m/register-provider-config! :deepseek {:base-url "https://ext-overlay/v1"})
           (t/is (= "https://ext-overlay/v1" (:base-url (m/get-model :deepseek "deepseek-v4-flash")))
                 "extension base-url wins over builtin")

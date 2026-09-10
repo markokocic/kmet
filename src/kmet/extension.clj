@@ -53,6 +53,9 @@
 ;;   :extension-name, :extension-path, :extension-dir   — identity/context
 ;;     (:extension-dir is nil for jar/zip artifacts — a jar has no directory;
 ;;     read bundled resources via clojure.java.io/resource instead)
+;;   :agent-dir                                          — host agent dir
+;;     (KMET_CODING_AGENT_DIR-aware; pi: getAgentDir) — extension state
+;;     (configs, caches) belongs under it
 ;;   :register-command! :unregister-command! :get-commands
 ;;   :register-tool! :unregister-tool! :get-all-tools
 ;;   :get-active-tools :set-active-tools
@@ -145,6 +148,13 @@
 (defn send-user-message [api text & [opts]] ((:send-user-message api) text opts))
 (defn exec [api command args & [opts]] ((:exec api) command args opts))
 
+(defn get-agent-dir
+  "The host agent dir (pi: getAgentDir — honors KMET_CODING_AGENT_DIR).
+   Keep extension state (configs, caches) under it so a sandboxed agent
+   dir relocates it too."
+  [api]
+  (:agent-dir api))
+
 (defn ui
   "The UI capability map (dialogs/status/widgets/editor/theme/...). Calls are
    inert before the layout exists and in headless mode."
@@ -235,121 +245,125 @@
       :tool-call-hooks [...] :tool-result-hooks [...]
       :input-hooks [...] :before-agent-start-hooks [...]
       :ui-calls [args...] :emitted [events...] :model-calls [...]}
-   Deregister fns remove the corresponding registrations (unload replay)."
-  []
-  (let [state (atom {:commands {} :tools {} :handlers {}
-                     :flags {} :entry-renderers {} :message-renderers {}
-                     :skills [] :prompts []
-                     :tool-call-hooks [] :tool-result-hooks []
-                     :input-hooks [] :before-agent-start-hooks []
-                     :ui-calls [] :emitted [] :model-calls []})
-        api {:extension-name "nullable" :extension-path "test" :extension-dir "test"
-             :register-command! (fn [cmd]
-                                  (swap! state assoc-in [:commands (:name cmd)] cmd)
-                                  (fn [] (swap! state update :commands dissoc (:name cmd))))
-             :unregister-command! (fn [name] (swap! state update :commands dissoc name))
-             :get-commands (fn [] (vals (:commands @state)))
-             :register-tool! (fn [tool]
-                               (swap! state assoc-in [:tools (:name tool)] tool)
-                               (fn [] (swap! state update :tools dissoc (:name tool))))
-             :unregister-tool! (fn [name] (swap! state update :tools dissoc name))
-             :get-all-tools (fn [] (vals (:tools @state)))
-             :get-active-tools (fn [] (keys (:tools @state)))
-             :set-active-tools (fn [names] (swap! state assoc :active-tools names))
-             :on-event (fn [event-type handler]
-                         (swap! state update-in [:handlers event-type] (fnil conj []) handler)
-                         (fn [] (swap! state update-in [:handlers event-type]
-                                       (fn [hs] (remove #(identical? % handler) hs)))))
-             :emit-event! (fn [event] (swap! state update :emitted conj event))
-             :on-input (fn [hook]
-                         (swap! state update :input-hooks conj hook)
-                         (fn [] (swap! state update :input-hooks
-                                       (fn [hs] (remove #(identical? % hook) hs)))))
-             :on-before-agent-start (fn [hook]
-                                      (swap! state update :before-agent-start-hooks conj hook)
-                                      (fn [] (swap! state update :before-agent-start-hooks
-                                                    (fn [hs] (remove #(identical? % hook) hs)))))
-             :on-tool-call (fn [hook]
-                             (swap! state update :tool-call-hooks conj hook)
-                             (fn [] (swap! state update :tool-call-hooks
-                                           (fn [hs] (remove #(identical? % hook) hs)))))
-             :on-tool-result (fn [hook]
-                               (swap! state update :tool-result-hooks conj hook)
-                               (fn [] (swap! state update :tool-result-hooks
-                                             (fn [hs] (remove #(identical? % hook) hs)))))
-             :register-flag! (fn [name opts]
-                               (swap! state assoc-in [:flags name] opts)
-                               (fn [] (swap! state update :flags dissoc name)))
-             :get-flag (fn [name] (get-in @state [:flags name]))
-             :register-shortcut! (fn [key-id opts]
-                                   (swap! state assoc-in [:shortcuts key-id] opts)
-                                   (fn [] (swap! state update :shortcuts dissoc key-id)))
-             :register-markdown-transformer! (fn [transformer]
-                                               (swap! state update :markdown-transformers conj transformer)
-                                               (fn [] (swap! state update :markdown-transformers
-                                                             (fn [ts] (remove #(identical? % transformer) ts)))))
-             :send-message! (fn [message opts]
-                              (swap! state update :ui-calls conj [:send-message! message opts]))
-             :register-entry-renderer! (fn [custom-type renderer]
-                                         (swap! state assoc-in [:entry-renderers custom-type] renderer)
-                                         (fn [] (swap! state update :entry-renderers dissoc custom-type)))
-             :register-message-renderer! (fn [custom-type renderer]
-                                           (swap! state assoc-in [:message-renderers custom-type] renderer)
-                                           (fn [] (swap! state update :message-renderers dissoc custom-type)))
-             :register-skill! (fn [raw-content & [opts]]
-                                (swap! state update :skills conj {:content raw-content :opts opts})
-                                (fn [] (swap! state update :skills
-                                              (fn [ss] (remove #(= raw-content (:content %)) ss)))))
-             :register-prompt! (fn [prompt & [opts]]
-                                 (swap! state update :prompts conj (assoc prompt :opts opts))
-                                 (fn [] (swap! state update :prompts
-                                               (fn [ps] (remove #(= prompt (dissoc % :opts)) ps)))))
-             :set-model (fn [model]
-                          (swap! state update :model-calls conj [:set-model model])
-                          (boolean model))
-             :get-thinking-level (fn [] :off)
-             :set-thinking-level (fn [level] (swap! state assoc :thinking level))
-             :send-user-message (fn [text opts]
-                                  (swap! state update :ui-calls conj [:send-user-message text opts]))
-             :exec (fn [command args opts]
-                     (swap! state update :ui-calls conj [:exec command args opts]))
-             :ui (into {} (for [[k _] {:notify 1 :custom 1
-                                       :set-status 1 :set-widget 1 :set-footer 1 :set-header 1
-                                       :set-editor-text 1 :get-editor-text 1 :paste-to-editor 1
-                                       :set-theme 1 :set-working-indicator 1
-                                       :set-working-message 1 :set-working-visible 1
-                                       :on-terminal-input 1 :set-tools-expanded 1
-                                       :get-tools-expanded 1}]
-                            [k (fn [& args] (swap! state update :ui-calls conj (into [k] args)))]))
-             :models {:get-all (fn [] (swap! state update :model-calls conj [:get-all]) [])
-                      :get-available (fn [] [])
-                      :find (fn [provider model-id]
-                              (swap! state update :model-calls conj [:find provider model-id])
-                              nil)
-                      :has-configured-auth (fn [model] (boolean model))
-                      :get-model-auth (fn [_model] {:configured false :source nil})
-                      :get-provider-auth-status (fn [_provider] {:configured false :source nil})
-                      :get-api-key-and-headers (fn [_model] {:ok false :error "nullable"})
-                      :get-registered-provider-config (fn [_provider-id] nil)
-                      :get-registered-provider-ids (fn [] [])
-                      :register-provider! (fn [provider-id config]
-                                            (swap! state update :model-calls
-                                                   conj [:register-provider! provider-id config])
-                                            {:name (str provider-id)})
-                      :unregister-provider! (fn [provider-id]
-                                              (swap! state update :model-calls
-                                                     conj [:unregister-provider! provider-id])
-                                              nil)}
-             :session {:append-entry! (fn [custom-type data]
-                                        (swap! state update :ui-calls conj [:append-entry custom-type data]))
-                       :append-message! (fn [custom-type _content display _details]
-                                          (swap! state update :ui-calls conj [:append-message custom-type display]))
-                       :get-entries (fn [_custom-type] [])
-                       :get-branch (fn [] [])
-                       :get-leaf-id (fn [] nil)
-                       :get-entry (fn [_id] nil)
-                       :set-label! (fn [id label] (swap! state assoc-in [:labels id] label))
-                       :get-label (fn [id] (get-in @state [:labels id]))
-                       :set-name! (fn [name] (swap! state assoc :session-name name))
-                       :get-name (fn [] (:session-name @state))}}]
-    {:api api :state state}))
+   Deregister fns remove the corresponding registrations (unload replay).
+   OPTS: :agent-dir — the value (get-agent-dir api) returns (default nil;
+   pass a temp dir in tests that exercise agent-dir state)."
+  ([] (create-nullable-api {}))
+  ([{:keys [agent-dir]}]
+   (let [state (atom {:commands {} :tools {} :handlers {}
+                      :flags {} :entry-renderers {} :message-renderers {}
+                      :skills [] :prompts []
+                      :tool-call-hooks [] :tool-result-hooks []
+                      :input-hooks [] :before-agent-start-hooks []
+                      :ui-calls [] :emitted [] :model-calls []})
+         api {:extension-name "nullable" :extension-path "test" :extension-dir "test"
+              :agent-dir agent-dir
+              :register-command! (fn [cmd]
+                                   (swap! state assoc-in [:commands (:name cmd)] cmd)
+                                   (fn [] (swap! state update :commands dissoc (:name cmd))))
+              :unregister-command! (fn [name] (swap! state update :commands dissoc name))
+              :get-commands (fn [] (vals (:commands @state)))
+              :register-tool! (fn [tool]
+                                (swap! state assoc-in [:tools (:name tool)] tool)
+                                (fn [] (swap! state update :tools dissoc (:name tool))))
+              :unregister-tool! (fn [name] (swap! state update :tools dissoc name))
+              :get-all-tools (fn [] (vals (:tools @state)))
+              :get-active-tools (fn [] (keys (:tools @state)))
+              :set-active-tools (fn [names] (swap! state assoc :active-tools names))
+              :on-event (fn [event-type handler]
+                          (swap! state update-in [:handlers event-type] (fnil conj []) handler)
+                          (fn [] (swap! state update-in [:handlers event-type]
+                                        (fn [hs] (remove #(identical? % handler) hs)))))
+              :emit-event! (fn [event] (swap! state update :emitted conj event))
+              :on-input (fn [hook]
+                          (swap! state update :input-hooks conj hook)
+                          (fn [] (swap! state update :input-hooks
+                                        (fn [hs] (remove #(identical? % hook) hs)))))
+              :on-before-agent-start (fn [hook]
+                                       (swap! state update :before-agent-start-hooks conj hook)
+                                       (fn [] (swap! state update :before-agent-start-hooks
+                                                     (fn [hs] (remove #(identical? % hook) hs)))))
+              :on-tool-call (fn [hook]
+                              (swap! state update :tool-call-hooks conj hook)
+                              (fn [] (swap! state update :tool-call-hooks
+                                            (fn [hs] (remove #(identical? % hook) hs)))))
+              :on-tool-result (fn [hook]
+                                (swap! state update :tool-result-hooks conj hook)
+                                (fn [] (swap! state update :tool-result-hooks
+                                              (fn [hs] (remove #(identical? % hook) hs)))))
+              :register-flag! (fn [name opts]
+                                (swap! state assoc-in [:flags name] opts)
+                                (fn [] (swap! state update :flags dissoc name)))
+              :get-flag (fn [name] (get-in @state [:flags name]))
+              :register-shortcut! (fn [key-id opts]
+                                    (swap! state assoc-in [:shortcuts key-id] opts)
+                                    (fn [] (swap! state update :shortcuts dissoc key-id)))
+              :register-markdown-transformer! (fn [transformer]
+                                                (swap! state update :markdown-transformers conj transformer)
+                                                (fn [] (swap! state update :markdown-transformers
+                                                              (fn [ts] (remove #(identical? % transformer) ts)))))
+              :send-message! (fn [message opts]
+                               (swap! state update :ui-calls conj [:send-message! message opts]))
+              :register-entry-renderer! (fn [custom-type renderer]
+                                          (swap! state assoc-in [:entry-renderers custom-type] renderer)
+                                          (fn [] (swap! state update :entry-renderers dissoc custom-type)))
+              :register-message-renderer! (fn [custom-type renderer]
+                                            (swap! state assoc-in [:message-renderers custom-type] renderer)
+                                            (fn [] (swap! state update :message-renderers dissoc custom-type)))
+              :register-skill! (fn [raw-content & [opts]]
+                                 (swap! state update :skills conj {:content raw-content :opts opts})
+                                 (fn [] (swap! state update :skills
+                                               (fn [ss] (remove #(= raw-content (:content %)) ss)))))
+              :register-prompt! (fn [prompt & [opts]]
+                                  (swap! state update :prompts conj (assoc prompt :opts opts))
+                                  (fn [] (swap! state update :prompts
+                                                (fn [ps] (remove #(= prompt (dissoc % :opts)) ps)))))
+              :set-model (fn [model]
+                           (swap! state update :model-calls conj [:set-model model])
+                           (boolean model))
+              :get-thinking-level (fn [] :off)
+              :set-thinking-level (fn [level] (swap! state assoc :thinking level))
+              :send-user-message (fn [text opts]
+                                   (swap! state update :ui-calls conj [:send-user-message text opts]))
+              :exec (fn [command args opts]
+                      (swap! state update :ui-calls conj [:exec command args opts]))
+              :ui (into {} (for [[k _] {:notify 1 :custom 1
+                                        :set-status 1 :set-widget 1 :set-footer 1 :set-header 1
+                                        :set-editor-text 1 :get-editor-text 1 :paste-to-editor 1
+                                        :set-theme 1 :set-working-indicator 1
+                                        :set-working-message 1 :set-working-visible 1
+                                        :on-terminal-input 1 :set-tools-expanded 1
+                                        :get-tools-expanded 1}]
+                             [k (fn [& args] (swap! state update :ui-calls conj (into [k] args)))]))
+              :models {:get-all (fn [] (swap! state update :model-calls conj [:get-all]) [])
+                       :get-available (fn [] [])
+                       :find (fn [provider model-id]
+                               (swap! state update :model-calls conj [:find provider model-id])
+                               nil)
+                       :has-configured-auth (fn [model] (boolean model))
+                       :get-model-auth (fn [_model] {:configured false :source nil})
+                       :get-provider-auth-status (fn [_provider] {:configured false :source nil})
+                       :get-api-key-and-headers (fn [_model] {:ok false :error "nullable"})
+                       :get-registered-provider-config (fn [_provider-id] nil)
+                       :get-registered-provider-ids (fn [] [])
+                       :register-provider! (fn [provider-id config]
+                                             (swap! state update :model-calls
+                                                    conj [:register-provider! provider-id config])
+                                             {:name (str provider-id)})
+                       :unregister-provider! (fn [provider-id]
+                                               (swap! state update :model-calls
+                                                      conj [:unregister-provider! provider-id])
+                                               nil)}
+              :session {:append-entry! (fn [custom-type data]
+                                         (swap! state update :ui-calls conj [:append-entry custom-type data]))
+                        :append-message! (fn [custom-type _content display _details]
+                                           (swap! state update :ui-calls conj [:append-message custom-type display]))
+                        :get-entries (fn [_custom-type] [])
+                        :get-branch (fn [] [])
+                        :get-leaf-id (fn [] nil)
+                        :get-entry (fn [_id] nil)
+                        :set-label! (fn [id label] (swap! state assoc-in [:labels id] label))
+                        :get-label (fn [id] (get-in @state [:labels id]))
+                        :set-name! (fn [name] (swap! state assoc :session-name name))
+                        :get-name (fn [] (:session-name @state))}}]
+     {:api api :state state})))

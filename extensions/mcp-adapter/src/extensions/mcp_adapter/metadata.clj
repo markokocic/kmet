@@ -2,7 +2,8 @@
   "Persistent MCP metadata cache (§8 of the design contract — pi:
    metadata-cache.ts, adapted to EDN).
 
-   Path: ~/.kmet/agent/mcp-cache.edn
+   Path: <agent-dir>/mcp-cache.edn (the host agent dir, KMET_CODING_AGENT_DIR-
+   aware)
    Shape: {:version 1
            :servers {name {:config-fingerprint str
                            :fetched-at ms
@@ -18,7 +19,8 @@
    Writes merge with the existing file and go through temp-file + rename
    (atomic-ish, single process — no lock needed)."
   (:require [babashka.fs :as fs]
-            [clojure.edn :as edn]))
+            [clojure.edn :as edn]
+            [extensions.mcp-adapter.config :as config]))
 
 (defn- read-text
   [path]
@@ -33,9 +35,10 @@
 (def ^:private max-age-ms (* 7 24 60 60 1000))
 
 (defn cache-path
-  "The metadata cache file (~/.kmet/agent/mcp-cache.edn)."
+  "The metadata cache file (<agent-dir>/mcp-cache.edn; the host agent dir
+   — KMET_CODING_AGENT_DIR-aware)."
   []
-  (str (fs/home) "/.kmet/agent/mcp-cache.edn"))
+  (str (fs/path (config/agent-dir) "mcp-cache.edn")))
 
 (defn- read-edn
   "Read an EDN map from PATH; nil when missing or unparsable."

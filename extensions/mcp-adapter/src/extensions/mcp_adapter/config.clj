@@ -5,9 +5,10 @@
    kmet: EDN only, exactly two sources, no imports/host discovery).
 
    Sources & precedence:
-     - global  ~/.kmet/agent/mcp.edn   (lower)
+     - global  <agent-dir>/mcp.edn     (lower; the host agent dir —
+                                       KMET_CODING_AGENT_DIR-aware)
      - project <cwd>/.kmet/mcp.edn     (higher — the only file this
-                                        extension writes)
+                                       extension writes)
 
    Project wins with a per-field server merge + per-key settings merge.
    Credential-bearing fields are bound to the url that supplied them: when
@@ -41,9 +42,24 @@
   [path text]
   (spit path (str text)))
 
-(def global-config-path
-  "Global config file (~/.kmet/agent/mcp.edn)."
-  (delay (str (fs/home) "/.kmet/agent/mcp.edn")))
+(def ^:private agent-dir-atom (atom nil))
+
+(defn set-agent-dir!
+  "Set the agent state dir (the host agent dir — ext/get-agent-dir; call
+   first in init). The global config, cache and token files live under it."
+  [dir]
+  (reset! agent-dir-atom (str dir)))
+
+(defn agent-dir
+  "The agent state dir, or the host default ~/.kmet/agent when init has not
+   set it (KMET_CODING_AGENT_DIR-aware via init)."
+  []
+  (or @agent-dir-atom (str (fs/path (fs/home) ".kmet" "agent"))))
+
+(defn global-config-path
+  "Global config file (<agent-dir>/mcp.edn)."
+  []
+  (str (fs/path (agent-dir) "mcp.edn")))
 
 (defn project-config-path
   "Project config file (<cwd>/.kmet/mcp.edn) — the only file the extension
@@ -285,7 +301,7 @@
    it does not exist yet (§6.4). Returns the path when written, nil when
    the file already exists."
   []
-  (let [path @global-config-path]
+  (let [path (global-config-path)]
     (when-not (fs/exists? path)
       (fs/create-dirs (fs/parent path))
       (write-text path template-edn)
@@ -317,7 +333,7 @@
   "The merged config from every source EXCEPT the project file (pi: the
    lower-precedence sources)."
   []
-  (or (read-config-file @global-config-path) {:mcp-servers {}}))
+  (or (read-config-file (global-config-path)) {:mcp-servers {}}))
 
 (defn set-server-disabled!
   "Port of pi's writeProjectServerDisabledOverride, onto EDN (§6.5):
@@ -581,7 +597,7 @@
    (loadDiscoveredHostConfigs): an explicit EDN definition always wins over
    a discovered one, and the URL-bound credential stripping applies."
   []
-  (let [global (read-config-file @global-config-path)
+  (let [global (read-config-file (global-config-path))
         project (read-config-file (project-config-path))
         merged (merge-configs (or global {:mcp-servers {}}) project)]
     (if (= :on (:host-config-discovery (:settings merged)))

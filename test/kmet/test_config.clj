@@ -76,16 +76,18 @@
         home (System/getProperty "user.home")]
     (t/testing "relative paths resolve against their scope dir"
       (let [global (resolve-paths {:session-dir "sessions" :model "x"} "/g/base")
-            project (resolve-paths {:extensions-dir ".kmet/ext" :prompts-dir "prompts"} "/p/base")]
+            project (resolve-paths {:session-dir "sessions"} "/p/base")]
         (t/is (= "/g/base/sessions" (:session-dir global)))
         (t/is (= "x" (:model global)))
-        (t/is (= "/p/base/.kmet/ext" (:extensions-dir project)))
-        (t/is (= "/p/base/prompts" (:prompts-dir project)))))
+        (t/is (= "/p/base/sessions" (:session-dir project)))))
+    (t/testing "retired :*-dir keys and resource entries pass through unresolved"
+      (let [res (resolve-paths {:extensions-dir "/custom/ext"
+                                :extensions ["extra"]} "/base")]
+        (t/is (= "/custom/ext" (:extensions-dir res)))
+        (t/is (= ["extra"] (:extensions res)))))
     (t/testing "tilde and absolute paths pass through"
-      (let [res (resolve-paths {:session-dir "~/.kmet/sessions"
-                                :skills-dir "/abs/skills"} "/base")]
-        (t/is (str/starts-with? (:session-dir res) home))
-        (t/is (= "/abs/skills" (:skills-dir res)))))
+      (let [res (resolve-paths {:session-dir "~/.kmet/sessions"} "/base")]
+        (t/is (str/starts-with? (:session-dir res) home))))
     (t/testing "non-string values and nil config pass through"
       (t/is (= {} (resolve-paths nil "/base")))
       (t/is (= {:model "x"} (resolve-paths {:model "x"} "/base")))
@@ -96,21 +98,59 @@
 ;; get-provider-api-type are deleted — base-url/api-type come from the models
 ;; registry (kmet.ai.models), not from config (covered by test_models).
 
-(t/deftest test-resource-dirs
-  (let [canon (fn [p] (str (fs/canonicalize (io/file p))))
-        global (canon (str (System/getProperty "user.home") "/.kmet/agent/skills"))
-        project (canon (str (System/getProperty "user.dir") "/.kmet/skills"))]
-    (t/testing "defaults: merged == global default, deduped to [global project]"
-      (t/is (= [global project]
-               (cfg/resource-dirs cfg/default-config :skills-dir ".kmet/skills"))))
-    (t/testing "explicit override loads after the defaults (pi additive paths)"
-      (let [c (assoc cfg/default-config :skills-dir "/custom/skills")
-            dirs (cfg/resource-dirs c :skills-dir ".kmet/skills")]
-        (t/is (= [global project "/custom/skills"] dirs))))
-    (t/testing "duplicate paths are deduped"
-      (let [c (assoc cfg/default-config :skills-dir global)
-            dirs (cfg/resource-dirs c :skills-dir global)]
-        (t/is (= [global] dirs))))))
+(t/deftest test-auto-resource-dirs
+  (let [sandbox (str (fs/create-temp-dir {:dir (System/getenv "TMPDIR")}))
+        agent-dir (str (fs/path sandbox "agent"))
+        cwd (str (fs/path sandbox "project"))
+        global (fn [type] (str (fs/path agent-dir (name type))))
+        project (fn [type] (str (fs/path cwd ".kmet" (name type))))]
+    (try
+      (t/testing "fixed roots: agent-dir + .kmet, global first (pi load order)"
+        (with-redefs [cfg/get-agent-dir (fn [] agent-dir)
+                      fs/cwd (fn [] cwd)]
+          (doseq [type [:extensions :skills :prompts :themes]]
+            (fs/create-dirs (global type))
+            (fs/create-dirs (project type)))
+          (t/is (= [(global :skills) (project :skills)]
+                   (cfg/auto-resource-dirs :skills)))))
+      (t/testing "missing dirs are skipped"
+        (with-redefs [fs/cwd (fn [] "/does/not/exist")]
+          (t/is (= [] (cfg/auto-resource-dirs :extensions "/does/not/exist")))))
+      (t/testing "explicit agent-dir pins the global root (sandboxing)"
+        (let [pinned (str (fs/path sandbox "pinned"))
+              ext (str (fs/path pinned "extensions"))]
+          (fs/create-dirs ext)
+          (with-redefs [fs/cwd (fn [] "/does/not/exist")]
+            (t/is (= [ext] (cfg/auto-resource-dirs :extensions pinned))))))
+      (finally (fs/delete-tree sandbox)))))
+
+(t/deftest test-agent-dir-override
+  (t/testing "default is ~/.kmet/agent"
+    ;; env stubbed so the assertions hold on hosts that set the override
+    (with-redefs [auth/getenv (fn [_] nil)]
+      (t/is (str/ends-with? (auth/resolve-agent-dir) "/.kmet/agent"))
+      (t/is (= (auth/resolve-agent-dir) (cfg/get-agent-dir)))))
+  (t/testing "KMET_CODING_AGENT_DIR wins; blanks fall back"
+    (with-redefs [auth/getenv (fn [_] nil)]
+      (t/is (str/ends-with? (auth/resolve-agent-dir) "/.kmet/agent")))
+    (with-redefs [auth/getenv (fn [_] "/sandbox/agent")]
+      (t/is (= "/sandbox/agent" (auth/resolve-agent-dir)))
+      (t/is (= "/sandbox/agent/auth.edn" (auth/auth-file-path)))
+      (t/is (= "/sandbox/agent/settings.edn" (cfg/global-settings-path))))
+    (with-redefs [auth/getenv (fn [_] "   ")]
+      (t/is (str/ends-with? (auth/resolve-agent-dir) "/.kmet/agent")))
+    (with-redefs [auth/getenv (fn [_] "~/custom")]
+      (t/is (str/starts-with? (auth/resolve-agent-dir) (System/getProperty "user.home"))))))
+
+(t/deftest test-retired-dir-keys-warn
+  (t/testing "retired :*-dir keys warn with the replacement entry"
+    (let [out (java.io.StringWriter.)]
+      (binding [*err* out]
+        (#'cfg/warn-retired-dir-keys! {:extensions-dir "/x" :theme "dark"} {:skills-dir "/y"}))
+      (let [s (str out)]
+        (t/is (str/includes? s ":extensions entry"))
+        (t/is (str/includes? s ":skills entry"))
+        (t/is (not (str/includes? s ":theme")))))))
 
 ;; ─── API key ───────────────────────────────────────────────────────────────
 

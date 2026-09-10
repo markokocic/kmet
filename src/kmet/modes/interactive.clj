@@ -1355,27 +1355,16 @@
               _ (extensions/clear-extensions!)
               ;; per-extension load results — the loaders only warn on
               ;; stderr, so failures must be collected for the transcript
-              ext-results (mapcat #(extensions/load-extensions-from-dir %)
-                                  (cfg/resource-dirs config :extensions-dir ".kmet/extensions"))
-              ;; configured packages reload after the auto dirs (pi: package
-              ;; resources rank below auto-discovered ones); their failures
-              ;; join the reload message like dir ones
-              pkg-ext-results (packages/load-package-extensions!)
-              ext-results (concat ext-results pkg-ext-results)
-              _ (packages/load-package-themes!)
+              ;; (one unified load: top-level entries, auto dirs, packages)
+              ext-results (packages/load-extensions!)
+              _ (packages/load-themes!)
               ;; pi: model-runtime.refresh — recompose providers from models.edn
               _ (models/load-models-config!)
               ;; pi: resourceLoader.reload (skills, prompts)
               _ (skills/clear-skills!)
-              _ (doseq [d (cfg/resource-dirs config :skills-dir ".kmet/skills")]
-                  (skills/load-skills-from-dir d))
               _ (prompts/clear-prompt-templates!)
-              _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
-                  (prompts/load-prompt-templates-from-dir d))
-              ;; configured packages load after the auto resource dirs (pi:
-              ;; package resources rank below auto-discovered ones)
-              _ (packages/load-package-skills!)
-              _ (packages/load-package-prompts!)
+              _ (packages/load-skills!)
+              _ (packages/load-prompts!)
               ;; pi: _rebuildSystemPrompt with new sources — the prompt is
               ;; built over the CURRENTLY active tool set (pi:
               ;; getActiveToolNames), so a pre-reload set-active-tools
@@ -3206,16 +3195,10 @@
         provider (cfg/get-provider config)
         model (models/resolve-config-model config)
 
-        ;; Load skills and prompt templates (pi: global + project + explicit
-        ;; paths load simultaneously)
-        _ (doseq [d (cfg/resource-dirs config :skills-dir ".kmet/skills")]
-            (skills/load-skills-from-dir d))
-        _ (doseq [d (cfg/resource-dirs config :prompts-dir ".kmet/prompts")]
-            (prompts/load-prompt-templates-from-dir d))
-        ;; Configured packages load after the auto resource dirs (pi: package
-        ;; resources rank below auto-discovered ones)
-        _ (packages/load-package-skills!)
-        _ (packages/load-package-prompts!)
+        ;; Load skills and prompt templates (pi: the unified resolution —
+        ;; top-level entries, auto roots, then packages)
+        _ (packages/load-skills!)
+        _ (packages/load-prompts!)
         system-prompt-opts {:custom-prompt (cfg/get-custom-prompt config)
                             :append-prompt (cfg/get-append-system-prompt config)
                             :context-files (context/load-project-context-files

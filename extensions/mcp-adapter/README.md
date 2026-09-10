@@ -31,8 +31,12 @@ Exactly two files:
 
 | File | Scope | Precedence |
 |---|---|---|
-| `~/.kmet/agent/mcp.edn` | global | lower |
+| `~/.kmet/agent/mcp.edn` (the agent dir) | global | lower |
 | `.kmet/mcp.edn` (project) | per-project | higher — the only file the extension writes |
+
+The global file, the metadata cache and the plaintext OAuth token store
+live in the agent dir — `~/.kmet/agent` by default, `KMET_CODING_AGENT_DIR`
+moves it.
 
 Per-field server merge, project wins. Keys are read in kebab or camel form,
 so copying content from a pi-style JSON config is a light edit. A

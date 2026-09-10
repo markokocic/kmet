@@ -74,8 +74,19 @@ require) fails the load with an explicit error.
 
 ## Where extensions live
 
-Extensions load from the `:extensions-dir` (default `~/.kmet/agent/extensions`,
-plus `.kmet/extensions` project-local) at startup and on `/reload`.
+Extensions load from the fixed auto roots — `~/.kmet/agent/extensions`
+plus `.kmet/extensions` project-local (pi: `join(agentDir, type)` +
+`join(cwd, CONFIG_DIR_NAME, type)`) — at startup and on `/reload`. The
+agent dir honors the `KMET_CODING_AGENT_DIR` env override (pi:
+`ENV_AGENT_DIR`). Extra paths load via top-level `:extensions` entries in
+`settings.edn`: plain entries are files or directories resolved against
+the settings scope root (the agent dir for global settings, `.kmet` for
+project settings); `!glob` excludes, `+path`/`-path` force include/exclude
+exact paths. Plain entries may also carry the same auto-root paths to
+select which discovered items stay enabled (e.g.
+`{:extensions ["extensions" "!extensions/noisy.clj"]}`). The
+`kmet config` screen lists and toggles every discovered resource
+(extensions, skills, prompts, themes) across both scopes.
 
 ### Built-in extensions (`extensions/`)
 
@@ -289,6 +300,9 @@ the wrappers below or directly.
 (:extension-path api)   ; absolute path to the extension file/dir/jar
 (:extension-dir api)    ; the extension's own directory — nil for jars
                         ; (a jar has no directory; use io/resource)
+(ext/get-agent-dir api) ; the host agent dir (KMET_CODING_AGENT_DIR-aware;
+                        ; pi: getAgentDir) — keep extension state
+                        ; (configs, caches) under it
 ```
 
 ### Commands and tools

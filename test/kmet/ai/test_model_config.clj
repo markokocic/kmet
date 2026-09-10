@@ -7,16 +7,19 @@
             [kmet.ai.model-config :as mc]))
 
 (defn- with-models-edn-paths
-  "Run F with models.edn redirected to a temp global/project pair."
+  "Run F with models.edn redirected to a temp global/project pair.
+   AGENT-DIR (the temp agent root) pins every load-config call — no
+   with-redefs needed. The project file resolves against the stubbed cwd."
   [f]
   (let [tmp (str (fs/absolutize (fs/file "target" (str "test-model-config-" (System/currentTimeMillis)))))
-        global (str tmp "/agent/models.edn")
-        project (str tmp "/project/models.edn")]
+        agent-dir (str tmp "/agent")
+        global (str agent-dir "/models.edn")
+        project (str tmp "/project/.kmet/models.edn")]
     (fs/create-dirs (fs/parent global))
     (fs/create-dirs (fs/parent project))
     (try
-      (with-redefs [mc/models-edn-paths (fn [] [global project])]
-        (f global project))
+      (with-redefs [fs/cwd (fn [] (str tmp "/project"))]
+        (f agent-dir global project))
       (finally (fs/delete-tree tmp)))))
 
 (defn- write! [path content]
@@ -26,31 +29,31 @@
 
 (t/deftest test-load-no-files
   (with-models-edn-paths
-    (fn [_global _project]
-      (t/is (= {:providers {} :error nil} (mc/load-config)))
-      (t/is (= {:providers {} :error nil} (mc/load-config!)))
+    (fn [agent-dir _global _project]
+      (t/is (= {:providers {} :error nil} (mc/load-config agent-dir)))
+      (t/is (= {:providers {} :error nil} (mc/load-config! agent-dir)))
       (t/is (= nil (mc/get-error)))
       (t/is (= {} (mc/get-providers))))))
 
 (t/deftest test-load-global-only
   (with-models-edn-paths
-    (fn [global _project]
+    (fn [agent-dir global _project]
       (write! global "{:providers {:my {:base-url \"https://x/v1\" :api :openai-completions
                                         :models [{:id \"m1\"}]}}}\n")
-      (let [config (mc/load-config)]
+      (let [config (mc/load-config agent-dir)]
         (t/is (nil? (:error config)))
         (t/is (= "https://x/v1" (get-in config [:providers :my :base-url])))
         (t/is (= [{:id "m1"}] (get-in config [:providers :my :models])))))))
 
 (t/deftest test-load-project-overrides-global
   (with-models-edn-paths
-    (fn [global project]
+    (fn [agent-dir global project]
       (write! global "{:providers {:my {:base-url \"https://global/v1\" :api :openai-completions
                                         :models [{:id \"m1\"}]}
                                    :other {:base-url \"https://other/v1\" :api :anthropic-messages
                                            :models [{:id \"m2\"}]}}}\n")
       (write! project "{:providers {:my {:base-url \"https://project/v1\"}}}\n")
-      (let [config (mc/load-config)]
+      (let [config (mc/load-config agent-dir)]
         (t/is (nil? (:error config)))
         (t/testing "project base-url wins; untouched providers survive the deep merge"
           (t/is (= "https://project/v1" (get-in config [:providers :my :base-url])))
@@ -59,9 +62,9 @@
 
 (t/deftest test-load-parse-error
   (with-models-edn-paths
-    (fn [global _project]
+    (fn [agent-dir global _project]
       (write! global "{:providers {:my {:base-url")
-      (let [config (mc/load-config)]
+      (let [config (mc/load-config agent-dir)]
         (t/is (= {} (:providers config)))
         (t/is (some? (:error config)))
         (t/is (str/starts-with? (:error config) "Failed to parse models.edn:"))
@@ -69,20 +72,20 @@
 
 (t/deftest test-load-non-map-root
   (with-models-edn-paths
-    (fn [global _project]
+    (fn [agent-dir global _project]
       (write! global "[1 2 3]\n")
-      (let [config (mc/load-config)]
+      (let [config (mc/load-config agent-dir)]
         (t/is (= {} (:providers config)))
         (t/is (str/includes? (:error config) "root: expected object"))))))
 
 (t/deftest test-load-into-atom
   (with-models-edn-paths
-    (fn [global _project]
+    (fn [agent-dir global _project]
       (write! global "{:providers {:my {:base-url \"https://x/v1\" :api :openai-completions
                                         :models [{:id \"m1\"}]}}}\n")
       (t/is (= {:providers {:my {:base-url "https://x/v1" :api :openai-completions :models [{:id "m1"}]}}
                 :error nil}
-               (mc/load-config!)))
+               (mc/load-config! agent-dir)))
       (t/is (= {:my {:base-url "https://x/v1" :api :openai-completions :models [{:id "m1"}]}}
                (mc/get-providers)))
       (t/is (= [:my] (mc/get-provider-ids)))
@@ -171,10 +174,10 @@
 (t/deftest test-string-provider-id-normalized
   (t/testing "string provider keys normalize to keywords (pi models.json ids are strings)"
     (with-models-edn-paths
-      (fn [global _project]
+      (fn [agent-dir global _project]
         (write! global "{:providers {\"string-prov\" {:base-url \"https://x/v1\" :api :openai-completions
                                                      :models [{:id \"m\"}]}}}\n")
-        (let [config (mc/load-config)]
+        (let [config (mc/load-config agent-dir)]
           (t/is (nil? (:error config)))
           (t/is (= [:string-prov] (keys (:providers config))))
           (t/is (= "https://x/v1" (get-in config [:providers :string-prov :base-url]))))))))

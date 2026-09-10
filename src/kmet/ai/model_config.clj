@@ -6,6 +6,8 @@
    merged like settings.edn — kmet deviation from pi's single global
    models.json). One immutable load per startup/reload; a parse or schema
    failure yields an error string and the registry keeps the built-ins.
+   AGENT-DIR pins the global file's scope dir (KMET_CODING_AGENT_DIR
+   sandboxing); nil resolves via cfg/get-agent-dir.
 
    Validation is a manual walker (no TypeBox) producing path-style messages
    ('providers.my-provider.models[0].cost: expected number'), collected
@@ -259,10 +261,12 @@
 
 (defn models-edn-paths
   "Global then project models.edn paths (project overrides global, like
-   settings.edn)."
-  []
-  [(str (fs/path (System/getProperty "user.home") ".kmet" "agent" "models.edn"))
-   (str (fs/path (fs/cwd) ".kmet" "models.edn"))])
+   settings.edn). AGENT-DIR pins the global file's scope dir
+   (KMET_CODING_AGENT_DIR sandboxing); nil resolves via cfg/get-agent-dir."
+  ([] (models-edn-paths nil))
+  ([agent-dir]
+   [(str (fs/path (or agent-dir (cfg/get-agent-dir)) "models.edn"))
+    (str (fs/path (fs/cwd) ".kmet" "models.edn"))]))
 
 (defn- load-config-file
   "Read + parse one models.edn file. Returns {:data map} (missing file →
@@ -292,30 +296,36 @@
   "One immutable load of models.edn (global + project merged, project wins —
    pi loads only the global file). Returns {:providers {provider-id config}
    :error str-or-nil}; a parse or schema failure yields :error with empty
-   :providers (the registry keeps the built-ins)."
-  []
-  (let [results (mapv load-config-file (models-edn-paths))
-        errors (keep :error results)]
-    (if (seq errors)
-      {:providers {} :error (str/join "\n\n" errors)}
-      (if (not-any? (fn [{:keys [data error]}] (or data error)) results)
-        {:providers {} :error nil}
-        (let [config (reduce (fn [acc {:keys [data]}] (cfg/deep-merge acc data)) {} results)]
-          (if-let [errors (seq (validate-config config))]
-            {:providers {}
-             :error (str "Invalid models.edn schema:\n"
-                         (str/join "\n" (map #(str "  - " %) errors))
-                         "\n\nFile: " (str/join ", " (models-edn-paths)))}
-            {:providers (normalize-provider-ids (or (:providers config) {}))
-             :error nil}))))))
+   :providers (the registry keeps the built-ins). AGENT-DIR pins the global
+   file's scope dir (KMET_CODING_AGENT_DIR sandboxing); nil resolves via
+   cfg/get-agent-dir."
+  ([] (load-config nil))
+  ([agent-dir]
+   (let [paths (models-edn-paths agent-dir)
+         results (mapv load-config-file paths)
+         errors (keep :error results)]
+     (if (seq errors)
+       {:providers {} :error (str/join "\n\n" errors)}
+       (if (not-any? (fn [{:keys [data error]}] (or data error)) results)
+         {:providers {} :error nil}
+         (let [config (reduce (fn [acc {:keys [data]}] (cfg/deep-merge acc data)) {} results)]
+           (if-let [errors (seq (validate-config config))]
+             {:providers {}
+              :error (str "Invalid models.edn schema:\n"
+                          (str/join "\n" (map #(str "  - " %) errors))
+                          "\n\nFile: " (str/join ", " paths))}
+             {:providers (normalize-provider-ids (or (:providers config) {}))
+              :error nil})))))))
 
 (defn load-config!
   "Load models.edn into the config atom; returns the config map. Called at
-   startup (models/load-models-config!) and from /reload."
-  []
-  (let [config (load-config)]
-    (reset! config-atom config)
-    config))
+   startup (models/load-models-config!) and from /reload. AGENT-DIR pins the
+   global file's scope dir (KMET_CODING_AGENT_DIR sandboxing)."
+  ([] (load-config! nil))
+  ([agent-dir]
+   (let [config (load-config agent-dir)]
+     (reset! config-atom config)
+     config)))
 
 (defn get-providers
   "The loaded models.edn providers map (empty when none or on load error)."

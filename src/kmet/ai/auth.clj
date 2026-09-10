@@ -104,10 +104,35 @@
 
 (defonce ^:private auth-atom (atom default-auth))
 
-(defn auth-file-path
-  "Global auth file (~/.kmet/agent/auth.edn), home-expanded."
+(def ^:private agent-dir-env-var
+  "Env var overriding the agent dir (pi: ENV_AGENT_DIR =
+   <APP>_CODING_AGENT_DIR)."
+  "KMET_CODING_AGENT_DIR")
+
+(defn default-agent-dir
+  "The default agent dir (~/.kmet/agent), home-expanded — used when the
+   override env var is absent or blank."
   []
-  (str (fs/path (System/getProperty "user.home") ".kmet" "agent" "auth.edn")))
+  (str (fs/path (System/getProperty "user.home") ".kmet" "agent")))
+
+(defn resolve-agent-dir
+  "Resolve the agent dir: the KMET_CODING_AGENT_DIR override when set and
+   non-blank, else the default. A ~-leading override expands against
+   user.home; relative overrides pass through (callers resolve against
+   the cwd)."
+  []
+  (let [s (some-> (getenv agent-dir-env-var) str/trim)]
+    (if (seq s)
+      (if (str/starts-with? s "~")
+        (str (System/getProperty "user.home") (subs s 1))
+        s)
+      (default-agent-dir))))
+
+(defn auth-file-path
+  "Global auth file (<agent-dir>/auth.edn). AGENT-DIR pins the scope dir
+   (KMET_CODING_AGENT_DIR sandboxing); nil resolves via resolve-agent-dir."
+  ([] (auth-file-path nil))
+  ([agent-dir] (str (fs/path (or agent-dir (resolve-agent-dir)) "auth.edn"))))
 
 (defn valid-credential?
   "Validate an auth.edn entry (pi auth-storage parse: non-object entries
@@ -125,11 +150,13 @@
 
 (defn load-auth!
   "Load auth.edn into the auth atom; returns the auth map. Called at startup
-   (config/load-config); /login and /logout refresh the atom directly."
-  []
-  (let [auth (cred/read-edn-map (auth-file-path) valid-credential?)]
-    (reset! auth-atom (or auth {}))
-    (or auth {})))
+   (config/load-config); /login and /logout refresh the atom directly.
+   AGENT-DIR pins the scope dir (KMET_CODING_AGENT_DIR sandboxing)."
+  ([] (load-auth! nil))
+  ([agent-dir]
+   (let [auth (cred/read-edn-map (auth-file-path agent-dir) valid-credential?)]
+     (reset! auth-atom (or auth {}))
+     (or auth {}))))
 
 (defn get-credentials
   "The current auth map (auth.edn content, as loaded)."

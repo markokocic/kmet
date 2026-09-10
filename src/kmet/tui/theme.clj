@@ -645,8 +645,8 @@
 (defonce ^:private theme-watch-mtime (atom nil))
 
 (defn set-custom-themes-dir!
-  "Set the custom themes directory (config :themes-dir) used by the
-   watcher."
+  "Set the custom themes directory (the agent-dir themes auto root) used
+   by the watcher."
   [dir]
   (reset! custom-themes-dir dir))
 

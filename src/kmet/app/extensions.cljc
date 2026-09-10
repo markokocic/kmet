@@ -41,6 +41,7 @@
             [kmet.app.session :as session]
             [kmet.app.skills :as skills]
             [kmet.app.tools.core :as tools]
+            [kmet.config :as cfg]
             [kmet.tui.theme :as theme]
             [kmet.extension]))
 
@@ -624,6 +625,9 @@
      ;; = the file's parent) — nil for jar extensions, which have no
      ;; directory (use io/resource instead)
      :extension-dir (extension-dir-of ext)
+     ;; host agent dir (KMET_CODING_AGENT_DIR-aware; pi: getAgentDir) —
+     ;; extensions keep their configs/caches under it
+     :agent-dir (cfg/get-agent-dir)
      :register-command! (fn [cmd]
                           ;; the handler is stored under :extension-handler so
                           ;; the runner can pass it the extension context

@@ -27,10 +27,13 @@
 (defn- with-settings
   "Run F with settings paths isolated and the given :user/:project settings
    maps written to the files. The read/save redefs are file-based, so
-   read-after-write round-trips behave like production."
+   read-after-write round-trips behave like production. CWD is a single
+   stable temp dir whose .kmet IS the project dir (production layout), so
+   project auto dirs created by a test actually resolve."
   [f {:keys [user project]}]
   (let [global-dir (tmp-dir)
-        project-dir (str (fs/path (tmp-dir) ".kmet"))
+        cwd (tmp-dir)
+        project-dir (str (fs/path cwd ".kmet"))
         read-file (fn [path default]
                     (if (fs/exists? path)
                       (or (edn/read-string (slurp path)) default)
@@ -51,8 +54,9 @@
                                               (spit (str (fs/path project-dir "settings.edn"))
                                                     (pr-str (assoc-in (read-file (str (fs/path project-dir "settings.edn")) {}) path value))))
                   cfg/get-agent-dir (fn [] global-dir)
-                  cfg/project-dir (fn [] project-dir)]
-      (f {:global-dir global-dir :project-dir project-dir}))))
+                  cfg/project-dir (fn [] project-dir)
+                  fs/cwd (fn [] cwd)]
+      (f {:global-dir global-dir :project-dir project-dir :cwd cwd}))))
 
 (defn- render-lines [screen width]
   (protocols/render screen width))
@@ -102,7 +106,7 @@
           (t/testing "header renders"
             (let [lines (render-lines screen 80)]
               (t/is (some #(str/includes? % "Global Resources") lines))
-              (t/is (some #(str/includes? % "~/.kmet/agent/settings.edn") lines))
+              (t/is (some #(str/includes? % "settings.edn") lines))
               (t/is (some #(str/includes? % "space toggle") lines))))
           (t/testing "item lines render the checkbox"
             (let [lines (render-lines screen 80)]
@@ -275,3 +279,117 @@
           (protocols/handle-input screen K-PGUP)
           (t/is (= 6 (rc/screen-selected screen)))))
       {:user {:packages [dir]}})))
+
+;; ─── Top-level / auto-dir groups (pi: top-level metadata) ──────────────────
+
+(t/deftest test-screen-top-level-groups-and-toggle
+  ;; the auto roots resolve as top-level groups (pi buildGroups over the
+  ;; unified resolution); a global-scope toggle writes the scope's settings
+  ;; resource array (pi toggleTopLevelResource)
+  (with-settings
+    (fn [{:keys [global-dir]}]
+      (fs/create-dirs (str global-dir "/extensions"))
+      (spit (str global-dir "/extensions/e.clj") "(ns e)\n")
+      (let [screen (rc/make-resource-config-screen :rows 40)
+            rows (rc/screen-rows screen)
+            items (item-rows screen)]
+        (t/is (= 1 (count items)))
+        (t/is (= :top-level (get-in (:item (first items)) [:metadata :origin])))
+        (t/is (some #(and (= :group (:kind %))
+                          (str/starts-with? (:label (:group %)) "User ("))
+                    rows))
+        (t/testing "space writes a -pattern into the :extensions array"
+          (protocols/handle-input screen " ")
+          (let [settings (edn/read-string (slurp (str (fs/path global-dir "settings.edn"))))]
+            (t/is (= ["-extensions/e.clj"] (:extensions settings)))))
+        (t/is (false? (:enabled (first (item-rows screen)))))
+        (t/testing "space again flips to +pattern"
+          (protocols/handle-input screen " ")
+          (let [settings (edn/read-string (slurp (str (fs/path global-dir "settings.edn"))))]
+            (t/is (= ["+extensions/e.clj"] (:extensions settings)))))))
+    {}))
+
+(t/deftest test-screen-top-level-settings-group-labels
+  ;; pi getGroupLabel: top-level settings-entry groups are "User settings" /
+  ;; "Project settings"; only auto-dir groups render their base dir
+  (with-settings
+    (fn [{:keys [global-dir project-dir]}]
+      (spit (str global-dir "/solo.clj") "(ns solo)\n")
+      (spit (str project-dir "/proj.clj") "(ns proj)\n")
+      (let [screen (rc/make-resource-config-screen :rows 40
+                                                   :write-scope :project
+                                                   :project-mode? true)
+            labels (keep #(when (= :group (:kind %)) (:label (:group %)))
+                         (rc/screen-rows screen))]
+        (t/is (some #(= "User settings" %) labels))
+        (t/is (some #(= "Project settings" %) labels))))
+    {:user {:extensions ["solo.clj"]}
+     :project {:extensions ["proj.clj"]}}))
+
+(t/deftest test-screen-project-top-level-tri-state
+  ;; inherited user top-level item: project scope cycles inherit/unload/load
+  ;; and writes the absolute path + +/- pattern into the project settings
+  ;; array (pi setProjectTopLevelOverride)
+  (with-settings
+    (fn [{:keys [global-dir project-dir]}]
+      (fs/create-dirs (str global-dir "/extensions"))
+      (spit (str global-dir "/extensions/e.clj") "(ns e)\n")
+      (let [screen (rc/make-resource-config-screen :rows 40
+                                                   :write-scope :project
+                                                   :project-mode? true)
+            item-path (str global-dir "/extensions/e.clj")]
+        (t/is (true? (:inherited? (first (item-rows screen)))))
+        (t/is (= :inherit (:override-state (first (item-rows screen)))))
+        (protocols/handle-input screen " ")
+        (let [settings (edn/read-string (slurp (str (fs/path project-dir "settings.edn"))))]
+          (t/is (= [item-path (str "-" item-path)] (:extensions settings))))
+        (t/is (= :unload (:override-state (first (item-rows screen)))))
+        (protocols/handle-input screen " ")
+        (let [settings (edn/read-string (slurp (str (fs/path project-dir "settings.edn"))))]
+          (t/is (= [item-path (str "+" item-path)] (:extensions settings))))
+        (t/is (= :load (:override-state (first (item-rows screen)))))
+        (protocols/handle-input screen " ")
+        (let [settings (edn/read-string (slurp (str (fs/path project-dir "settings.edn"))))]
+          (t/is (= [] (:extensions settings))))
+        (t/is (= :inherit (:override-state (first (item-rows screen)))))))
+    {}))
+
+;; ─── Project auto-dir items (regression: SCI duplicate-key crash) ─────────
+
+(t/deftest test-screen-project-auto-item-renders-and-toggles
+  ;; regression: a project auto-dir item (base dir IS the project scope
+  ;; root) used to crash the render — the override-patterns set literal
+  ;; evaluated to duplicate strings, which babashka/SCI rejects.
+  (with-settings
+    (fn [{:keys [project-dir]}]
+      (fs/create-dirs (str project-dir "/prompts"))
+      (spit (str project-dir "/prompts/test.md") "# t\n")
+      (let [screen (rc/make-resource-config-screen :rows 40
+                                                   :write-scope :project
+                                                   :project-mode? true)
+            items (item-rows screen)
+            proj-item (first (filter #(= :project (get-in (:item %) [:metadata :scope]))
+                                     items))]
+        (t/is (some? proj-item))
+        (t/is (= :inherit (:override-state proj-item)))
+        (t/testing "renders without throwing"
+          (t/is (pos? (count (render-lines screen 80)))))
+        (t/testing "space cycles the project override"
+          (rc/screen-set-query! screen "test.md")
+          (protocols/handle-input screen " ")
+          (let [settings (edn/read-string (slurp (str (fs/path project-dir "settings.edn"))))]
+            (t/is (= ["-prompts/test.md"] (:prompts settings))))
+          (t/is (= :unload (:override-state (first (item-rows screen))))))))
+    {}))
+
+(t/deftest test-screen-global-view-excludes-project-scope
+  ;; pi's global config view runs an untrusted settings manager: project
+  ;; settings AND project auto dirs are absent, not just project entries.
+  (with-settings
+    (fn [{:keys [project-dir]}]
+      (fs/create-dirs (str project-dir "/prompts"))
+      (spit (str project-dir "/prompts/test.md") "# t\n")
+      (let [screen (rc/make-resource-config-screen :rows 40)]
+        (t/is (not-any? #(= :project (get-in (:item %) [:metadata :scope]))
+                        (item-rows screen)))))
+    {}))
