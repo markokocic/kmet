@@ -1929,6 +1929,9 @@
    "deepseek/deepseek-v4-flash"        [:deepseek "deepseek-v4-flash"]
    "deepseek/deepseek-v4-flash-vision-exp" [:opencode-go "deepseek-v4-flash-vision-exp"]
    "deepseek/deepseek-v4-pro"          [:deepseek "deepseek-v4-pro"]
+   ;; same weights as opencode-go's "DeepSeek V4.1 Flash" (deepseek.edn has
+   ;; no v4.1 entry); without a ref the endpoint entry kept :reasoning false
+   "deepseek/deepseek-v4.1-flash"      [:opencode-go "deepseek-flash"]
    "google/gemini-3.1-flash-lite"      [:google "gemini-3.1-flash-lite"]
    "google/gemini-3.5-flash"           [:google "gemini-3.5-flash"]
    "google/gemini-3.5-flash-lite"      [:google "gemini-3.5-flash-lite"]
