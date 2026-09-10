@@ -50,6 +50,72 @@
       (t/is (str/includes? html ">Compaction<"))
       (t/is (str/includes? html "summed up")))))
 
+(def ^:private png
+  "A 1x1 PNG, base64."
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+
+(t/deftest test-export-user-image-embedded
+  ;; a user message image block becomes an inline base64 data-URI
+  ;; <img class="message-image"> (pi: export-html message-images) — not the
+  ;; old [image: mime] text placeholder
+  (let [sess (make-session)]
+    (s/append-entry sess {:role :user
+                          :content [{:type :text :text "look:"}
+                                    {:type :image :data png :mime-type "image/png"}]})
+    (let [html (se/session->html sess)]
+      (t/is (str/includes? html (str "src=\"data:image/png;base64," png "\""))
+            "the image is embedded as a data URI")
+      (t/is (str/includes? html "class=\"message-image\""))
+      (t/is (not (str/includes? html "[image: image/png]"))
+            "no text placeholder once the image is embedded"))))
+
+(t/deftest test-export-tool-images-embedded
+  ;; a tool entry's :images become base64 <img class="tool-image"> elements
+  ;; before the output text (pi: renderResultImages)
+  (let [sess (make-session)]
+    (s/append-entry sess {:role :assistant :content [{:type :text :text "ok"}]
+                          :tool-calls [{:id "t1" :name "read" :arguments {:path "x.png"}}]})
+    (s/append-entry sess {:role :tool
+                          :content [{:type :tool_result :tool_use_id "t1"
+                                     :content "Read image file [image/png]"}]
+                          :tool-name "read" :is-error false
+                          :images [{:data png :mime-type "image/png"}]})
+    (let [html (se/session->html sess)
+          img-pos (str/index-of html "class=\"tool-image\"")
+          out-pos (str/index-of html "Read image file")]
+      (t/is (str/includes? html (str "src=\"data:image/png;base64," png "\"")))
+      (t/is (str/includes? html "<div class=\"tool-images\">"))
+      (t/is (and img-pos out-pos (< img-pos out-pos))
+            "images render before the tool output text"))))
+
+(t/deftest test-export-tool-without-images-unchanged
+  ;; a tool entry without :images renders no image markup
+  (let [sess (make-session)]
+    (s/append-entry sess {:role :tool :content "plain output" :tool-name "bash"})
+    (let [html (se/session->html sess)]
+      (t/is (not (str/includes? html "<div class=\"tool-images\">")))
+      (t/is (not (str/includes? html "<img"))))))
+
+(t/deftest test-export-malformed-image-falls-back
+  ;; an image block without :data keeps the text placeholder instead of
+  ;; emitting a broken <img>
+  (let [sess (make-session)]
+    (s/append-entry sess {:role :user :content [{:type :image :mime-type "image/png"}]})
+    (let [html (se/session->html sess)]
+      (t/is (str/includes? html "[image: image/png]"))
+      (t/is (not (str/includes? html "<img"))))))
+
+(t/deftest test-export-image-mime-escaped
+  ;; the mime type is HTML-escaped inside the data URI (attribute breakout
+  ;; guard)
+  (let [sess (make-session)]
+    (s/append-entry sess {:role :user
+                          :content [{:type :image :data "AA"
+                                     :mime-type "image/x\"onload=1"}]})
+    (let [html (se/session->html sess)]
+      (t/is (str/includes? html "image/x&quot;onload=1"))
+      (t/is (not (str/includes? html "src=\"data:image/x\""))))))
+
 (t/deftest test-export-skips-labels
   (let [sess (make-session)]
     (s/append-entry sess {:role :user :content "q"})

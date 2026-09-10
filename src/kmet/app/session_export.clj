@@ -43,10 +43,26 @@
                                 "")]]
                   (str t))))))
 
+(defn- image-html
+  "Render an image content block as a self-contained base64 data-URI <img>
+   (pi: export-html renderResultImages / message-images — the export embeds
+   the payload so the file opens anywhere). CLASS is the pi class name
+   (message-image | tool-image). Blocks without :data (malformed) render as
+   the text placeholder instead, so a broken block never emits a broken
+   image."
+  [b class]
+  (if (seq (:data b))
+    (str "<img src=\"data:" (escape-html (or (:mime-type b) "image/png"))
+         ";base64," (escape-html (:data b))
+         "\" class=\"" class "\">")
+    (str "<div class=\"image\">[image: " (escape-html (or (:mime-type b) "unknown"))
+         (when-let [name (:name b)] (str " " (escape-html name)))
+         "]</div>")))
+
 (defn- content->html
-  "Render an entry's content blocks: text blocks inline, images as their
-   data prefix (the base64 payload is too large to embed in HTML), tool
-   results in a nested block."
+  "Render an entry's content blocks: text blocks inline, images as inline
+   base64 <img> elements (pi: message-images), tool results in a nested
+   block."
   [e]
   (let [content (:content e)]
     (if (string? content)
@@ -55,9 +71,7 @@
        (for [b content]
          (case (:type b)
            :text (str "<pre>" (escape-pre (:text b)) "</pre>")
-           :image (str "<div class=\"image\">[image: " (escape-html (or (:mime-type b) "unknown"))
-                       (when-let [name (:name b)] (str " " (escape-html name)))
-                       "]</div>")
+           :image (image-html b "message-image")
            :thinking (str "<details class=\"thinking\"><summary>Thinking</summary><pre>"
                           (escape-pre (:text b)) "</pre></details>")
            :tool_result (str "<div class=\"tool-result\"><pre>" (escape-pre (str (:content b)))
@@ -105,6 +119,16 @@
   [e]
   (str (:summary e "")))
 
+(defn- tool-images->html
+  "Render a tool entry's image blocks as inline base64 <img> elements
+   (pi: export-html renderResultImages — the tool result's images, before
+   the output text)."
+  [e]
+  (when-let [images (seq (:images e))]
+    (str "<div class=\"tool-images\">"
+         (apply str (map #(image-html % "tool-image") images))
+         "</div>")))
+
 (defn- entry->html
   "Render a single session entry as an HTML <div class=\"entry\"> block.
    :label entries are skipped (bookkeeping, not conversation content)."
@@ -144,12 +168,11 @@
                     (when (:truncated e) "\n[truncated]")
                     "</pre>"))
              (when (= :tool role)
-               (str "<pre class=\"tool-output\">" (escape-pre (content-text e)) "</pre>"))
+               (str (tool-images->html e)
+                    "<pre class=\"tool-output\">" (escape-pre (content-text e)) "</pre>"))
              (when (= :session-info role)
                (str "<div class=\"session-name\">" (escape-html (or (:name e) "")) "</div>"))
              "</div>")))))
-
-;; ─── Full document ─────────────────────────────────────────────────────────
 
 ;; ─── Full document ─────────────────────────────────────────────────────────
 
@@ -216,6 +239,8 @@
    .thinking summary{color:#6c7086;cursor:pointer}
    .thinking pre{color:#a6adc8}
    .image,.session-name{color:#cba6f7}
+   .message-image,.tool-image{display:block;max-width:min(100%,40rem);max-height:24rem;margin:.3rem 0;border-radius:4px}
+   .tool-images{margin:.3rem 0}
    details.system-prompt,details.tools{margin:0 0 1rem;padding:.6rem .9rem;border:1px solid #313244;border-radius:6px;background:#181825}
    details.system-prompt summary,details.tools summary{color:#89b4fa;font-weight:bold;cursor:pointer}
    details.system-prompt pre{color:#a6adc8;background:#11111b;padding:.4rem;border-radius:4px}
