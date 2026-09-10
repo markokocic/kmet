@@ -18,10 +18,11 @@
 (def image-settings-atom
   "Live inline-image display settings: {:show-images boolean
    :image-width-cells number}. Seeded from the config's :terminal map at
-   startup (modes.interactive/build-layout) and reset by the /settings rows;
-   every image renders through image-settings-sub, so a change re-renders
-   all mounted images at once (pi: settingsManager setShowImages /
-   setImageWidthCells updating the chat's tool executions)."
+   startup (modes.interactive/build-layout), reset by the /settings rows and
+   re-seeded by /reload (pi: settingsManager.reload); every image renders
+   through image-settings-sub, so a change re-renders all mounted images at
+   once (pi: settingsManager setShowImages / setImageWidthCells updating the
+   chat's tool executions)."
   (atom {:show-images true :image-width-cells 60}))
 
 (def image-settings-sub

@@ -352,7 +352,11 @@ and receive the same `ToolRenderContext` map the builtin renderers get
 (args, tool-call-id, invalidate, state/set-state!, cwd, is-partial,
 expanded, is-error, show-images — whether images render: the
 `:terminal :show-images` setting AND terminal image support). `:render-shell :self` lets the renderer own its outer
-box, padding, and status background. The supported reusable built-in
+box, padding, and status background. A renderer's returned component is
+disposed when a later pass replaces it — to keep an instance across passes,
+return the same one back (read it from `:last-component` and return it
+unchanged); a renderer that returns a fresh component each pass gets the
+previous one cleaned up automatically. The supported reusable built-in
 renderer vars are in `kmet.app.ui.tool-renderers`, including
 `render-edit-call` and `render-edit-result`; the namespace is explicitly
 shared with extensions. Path display helpers are public too:

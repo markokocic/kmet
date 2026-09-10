@@ -1393,6 +1393,14 @@
           (reset! (:system-prompt-opts agent-state) system-prompt-opts)
           (ui/loaded-resources-set-sections!
            (:loaded-resources-comp cs) (build-loaded-resource-sections))
+          ;; pi: settingsManager.reload() — re-seed the live image settings
+          ;; (/settings persists to settings.edn, whose merged value can also
+          ;; change externally between reloads) and re-apply the provider
+          ;; image-blocking knob to the running agent
+          (reset! subs/image-settings-atom
+                  {:show-images (cfg/get-show-images config)
+                   :image-width-cells (cfg/get-image-width-cells config)})
+          (agent/set-block-images! agent-state (cfg/get-block-images config))
           (update-footer! cs)
           ;; pi: reload re-emits session_start so extensions re-register UI.
           ;; Runs on a future — handlers may block on dialog promises, which
@@ -1571,12 +1579,16 @@
               ;; from the entry's own fields
               (ui/chat-history-add-message!
                (:chat-history cs)
-               {:role :tool
-                :content (content-of e)
-                :name (or (:tool-name e) (:name e) "tool")
-                :is-error (:is-error e false)
-                :truncation (:truncation e)
-                :details (:details e)})))
+               (cond-> {:role :tool
+                        :content (content-of e)
+                        :name (or (:tool-name e) (:name e) "tool")
+                        :is-error (:is-error e false)
+                        :truncation (:truncation e)
+                        :details (:details e)}
+                 ;; image results carry their blocks on the entry (pi:
+                 ;; toolResult content blocks) — the callback component
+                 ;; renders them like a matched result's would
+                 (seq (:images e)) (assoc :images (:images e))))))
 
           :else
           (ui/chat-history-add-message!

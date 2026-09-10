@@ -14,6 +14,16 @@
             [kmet.app.loop :as agent]
             [kmet.app.session :as session]
             [kmet.app.ui :as ui]
+            [kmet.app.ui.subs :as subs]
+            [kmet.app.packages :as packages]
+            [kmet.app.skills :as skills]
+            [kmet.app.prompts :as prompts]
+            [kmet.libs.context :as context]
+            [kmet.app.extensions :as extensions]
+            [kmet.app.theme-controller :as theme-ctrl]
+            [kmet.ai.models :as models]
+            [kmet.app.keybindings :as app-kb]
+            [kmet.config :as cfg]
             [kmet.tui.components.container :as container]
             [kmet.tui.components.editor :as editor]
             [kmet.libs.terminal-image :as timg]
@@ -396,3 +406,80 @@
       (is (false? (command-line? "/model gpt-4o\nsecond line")))
       (is (false? (command-line? "/model\n\nrest")))
       (is (false? (command-line? "!ls\n!echo hi"))))))
+
+(deftest replay-branch-restores-unpaired-tool-images
+  (testing "an unpaired tool result (no matching call — legacy sessions,
+            extension tools) keeps its image blocks on replay"
+    (let [sess-dir (str "target/test-interactive-replay-orphan-" (System/currentTimeMillis))
+          sess (session/create-session sess-dir)]
+      (try
+        (session/append-entry sess {:role :assistant
+                                    :content [{:type :text :text "ok"}]})
+        (session/append-entry sess
+                              {:role :tool
+                               :content [{:type :tool_result :tool_use_id "orphan"
+                                          :content "Read image file [image/png]"}]
+                               :tool-name "read" :is-error false
+                               :images [{:data "AA" :mime-type "image/png"}]})
+        (let [loaded (session/load-session (:file sess))
+              ch (ui/make-chat-history)
+              cs (inter/map->CoreState {:chat-history ch})
+              prev-caps (timg/get-capabilities)]
+          (timg/set-capabilities! {:images nil :true-color true :hyperlinks true})
+          (try
+            ((var inter/replay-branch!) cs loaded)
+            (let [msg (first (filter #(= :tool (:role %)) @(:messages-atom ch)))
+                  lines (protocols/render (:component msg) 60)]
+              (is (some? msg))
+              (is (= [{:data "AA" :mime-type "image/png"}] (:images msg))
+                  "the orphan result carries its image blocks")
+              (is (str/includes? (str/join "\n" lines) "[Image: [image/png]")
+                  "the orphan result's image renders"))
+            (finally (timg/set-capabilities! prev-caps))))
+        (finally (fs/delete-tree sess-dir))))))
+
+(deftest reload-reseeds-image-settings-and-block-images
+  (testing "/reload re-reads the image settings and the provider image-blocking
+            knob from the reloaded config (pi: settingsManager.reload)"
+    (let [ag (agent/make-agent-state)
+          ch (ui/make-chat-history)
+          cs {:agent-state (atom ag)
+              :chat-history ch
+              :theme-controller nil
+              :loaded-resources-comp nil
+              :footer-comp nil
+              :config cfg/default-config
+              :tui nil
+              :system-prompt-opts (atom nil)}
+          prev-settings @subs/image-settings-atom]
+      (try
+        ;; stale live state — the reloaded config must overwrite it
+        (reset! subs/image-settings-atom {:show-images false :image-width-cells 5})
+        (agent/set-block-images! ag false)
+        (with-redefs [cfg/init! (fn [] (assoc cfg/default-config
+                                              :terminal {:show-images true :image-width-cells 120}
+                                              :images {:block-images true}))
+                      ;; the minimal cs has no theme controller — the real
+                      ;; set-config! would NPE on the nil controller
+                      theme-ctrl/set-config! (fn [_ _] nil)
+                      app-kb/reload-agent-keybindings! (fn [] nil)
+                      packages/load-extensions! (fn [] [])
+                      packages/load-themes! (fn [] nil)
+                      models/load-models-config! (fn [] nil)
+                      skills/clear-skills! (fn [] nil)
+                      prompts/clear-prompt-templates! (fn [] nil)
+                      packages/load-skills! (fn [] nil)
+                      packages/load-prompts! (fn [] nil)
+                      context/load-project-context-files (fn [_ _] [])
+                      ui/chat-history-set-thinking-hidden! (fn [_ _] nil)
+                      ui/loaded-resources-set-sections! (fn [_ _] nil)
+                      extensions/ui-reset! (fn [] nil)
+                      extensions/clear-extensions! (fn [] nil)
+                      extensions/discover-resources! (fn [_ _] nil)
+                      event-bus/emit-event! (fn [_] nil)]
+          ((var inter/handle-reload) cs nil))
+        (is (= {:show-images true :image-width-cells 120} @subs/image-settings-atom)
+            "live image settings re-seeded from the reloaded config")
+        (is (true? (:block-images @(:cfg ag)))
+            "block-images re-applied to the running agent")
+        (finally (reset! subs/image-settings-atom prev-settings))))))

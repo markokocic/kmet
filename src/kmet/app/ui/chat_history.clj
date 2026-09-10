@@ -595,10 +595,10 @@
 (defn chat-history-get-messages
   "Get all stored messages as plain maps — the data source of the chat,
    read directly from messages-atom (no component reverse-engineering).
-   Includes the info banner first; excludes bash executions (!! / !) and
-   status lines, which are UI-only, and strips the :component/:streaming?
-   keys plus live assistant content atoms (dereferenced into plain
-   :content/:thinking values)."
+   Includes the info banner first (its :images carried through); excludes
+   bash executions (!! / !) and status lines, which are UI-only, and strips
+   the :component/:streaming? keys plus live assistant content atoms
+   (dereferenced into plain :content/:thinking values)."
   [ch]
   (->> (concat
         (when-let [info @(:info-comp-atom ch)]
