@@ -19,9 +19,10 @@
    Display follows /session: the panel is appended to the chat history as
    an :info message via kmet.extension/ui-chat-info — part of the live
    transcript, no overlay and nothing to dismiss, never sent to the LLM,
-   not persisted across restarts. It is laid out as narrow lines (see
-   `max-line-len`): the chat word-wraps content without a hanging indent,
-   so a wide line on a narrow terminal comes back as scattered words.
+   not persisted across restarts. It is laid out as one unwrapped logical
+   line per block: the chat's Markdown view word-wraps each paragraph to
+   the message width, so a wide terminal shows every block on a single
+   line while a narrow one wraps at word boundaries.
    Headless/print mode falls back to a one-line flash — as does a host
    whose running instance predates the bridge (/reload refreshes extension
    files, not host code).
@@ -190,46 +191,25 @@
 
 ;; ─── The panel (/session-style chat info message) ─────────────────────────
 
-(def ^:private max-line-len
-  "Hard cap on a panel line, in characters — every panel character is
-   single-column (ASCII plus the en dash and ● markers), so `count` is the
-   rendered width. The chat paints the content through its Markdown view,
-   which word-wraps at
-   the message width WITHOUT a hanging indent: a wrapped tail drops back to
-   column 0, out of its block, and the panel reads as noise. So the layout
-   is short, self-contained lines; at 22 a 24-column message width (22 +
-   the 1-column box padding on each side, i.e. a 26-column terminal) still
-   shows every line unwrapped."
-  22)
-
-(defn- zone-label
-  "The zone name for the local block header, kept short enough that
-   \"Local (…)\" fits max-line-len: the full zone id when it fits, its last
-   path segment otherwise (America/Los_Angeles → Los Angeles) — a longer id
-   would wrap away from the header it labels."
-  [zone]
-  (let [id (str zone)
-        budget (- max-line-len (count "Local ()"))]
-    (if (<= (count id) budget)
-      id
-      (-> id (str/split #"/") last (str/replace "_" " ")))))
-
-(defn- span-line
-  "One window on one line — \"  04:00–07:00\" — for the block under a header
-   carrying its zone. WITH-DOW? adds the weekday of the window's start: the
-   local view needs it, since west of UTC a UTC-Monday window starts on
-   Sunday local time, a day the UTC rule does not imply."
+(defn- window-span
+  "One window as a compact span — \"04:00–07:00\" — for a comma-joined list
+   sharing one logical line. WITH-DOW? prefixes the weekday of the window's
+   start: the local view needs it, since west of UTC a UTC-Monday window
+   starts on Sunday local time, a day the UTC rule does not imply."
   [w zone with-dow?]
-  (str "  " (fmt-local (:start w) zone with-dow?) "–" (fmt-local (:end w) zone)))
+  (str (fmt-local (:start w) zone with-dow?) "–" (fmt-local (:end w) zone)))
 
 (defn- peak-panel-text
   "The panel as styled plain text for the chat :info message (dim labels,
    plain times and phase line — the /session look: a bracketed
    [DeepSeek Peak Hours] label above, ANSI passed through by the markdown
    view, so no theme instance is needed: only the global theme/dim and the
-   message's own text color). UTC windows first (the published rule), then
-   the same windows on the detected local clock, then the current phase and
-   the switch countdown. Every line stays inside max-line-len."
+   message's own text color). One unwrapped logical line per block — UTC
+   windows first (the published rule), then the same windows on the
+   detected local clock, then the off-peak note, then the current phase
+   with the switch countdown — blank-line separated. The chat's Markdown
+   view word-wraps each paragraph to the message width: wide terminals show
+   every block on a single line, narrow ones wrap at word boundaries."
   []
   (let [now (now-local)
         zone (.getZone now)
@@ -237,17 +217,15 @@
         remaining (format-duration (java.time.Duration/between now next-change))
         peak? (= :peak phase)
         wins (windows-on-utc-date (next-peak-date now))]
-    (str (theme/dim "Peak — full rate") "\n"
-         (theme/dim "  Mon–Fri UTC") "\n"
-         (str/join "\n" (map #(span-line % utc false) wins)) "\n\n"
-         (theme/dim (str "Local (" (zone-label zone) ")")) "\n"
-         (str/join "\n" (map #(span-line % zone true) wins)) "\n\n"
-         (theme/dim "Off-peak — half rate") "\n"
-         (theme/dim "  all other hours,") "\n"
-         (theme/dim "  incl. Sat/Sun UTC") "\n\n"
-         (if peak? "● PEAK now" "● OFF-PEAK now") "\n"
-         (theme/dim (format "  ends %s" (fmt-local next-change zone true))) "\n"
-         (theme/dim (format "  (in %s)" remaining)))))
+    (str (theme/dim "Peak — full rate (Mon–Fri UTC): ")
+         (str/join ", " (map #(window-span % utc false) wins)) "\n\n"
+         (theme/dim (str "Local (" zone "): "))
+         (str/join ", " (map #(window-span % zone true) wins)) "\n\n"
+         (theme/dim "Off-peak — half rate: all other hours, incl. Sat/Sun UTC")
+         "\n\n"
+         (if peak? "● PEAK now" "● OFF-PEAK now")
+         (theme/dim (format " — ends %s (in %s)"
+                            (fmt-local next-change zone true) remaining)))))
 
 (defn- show-peak-info!
   "Append the panel as an :info chat message (the /session display style —
