@@ -936,6 +936,16 @@
              (:content (first (filter #(= :user (:role %)) (:messages sent)))))
           "images pass through when the setting is off")))
 
+(t/deftest test-loop-block-images-noncanonical-tool-message
+  ;; Defensive shape (direct filter call — such a message is normally dropped
+  ;; by drop-incomplete-tool-calls before this filter runs): string content
+  ;; with :images still loses the images (nothing may reach the provider)
+  ;; without the content rewrite blowing up.
+  (let [f (deref #'kmet.app.loop/block-message-images)
+        out (f [{:role :tool :content "plain" :images [{:data "AA"}]}])]
+    (t/is (nil? (:images (first out))) "images dropped")
+    (t/is (= "plain" (:content (first out))) "content left as-is")))
+
 (t/deftest test-loop-set-block-images-live
   (let [agent (loop/make-agent-state)]
     (t/is (false? (:block-images @(:cfg agent))))

@@ -26,6 +26,7 @@
             [kmet.ai.auth :as auth]
             [kmet.app.loop :as agent]
             [kmet.libs.http :as http]
+            [kmet.libs.terminal-image :as timg]
             [kmet.app.session :as session]
             [kmet.app.ui.footer-data-provider :as fdp]
             [babashka.fs :as fs]
@@ -42,6 +43,14 @@
   (fn [_ component & [focus]]
     (reset! ref (or focus component))
     (fn [])))
+
+(def ^:private no-image-caps
+  "Capabilities stub for the /settings tests: the image rows (Show images /
+  Image width) exist only when the terminal reports image support
+  (image-rows), so index-based row navigation must not depend on the
+  developer's terminal. Stub get-capabilities alongside the other test
+  redefs."
+  {:images nil :true-color true :hyperlinks false})
 
 (defn- transfer-editor! [app-ed custom-ed kb]
   ((var inter/transfer-editor!) app-ed custom-ed kb))
@@ -594,6 +603,7 @@
           sl-ref (atom nil)
           saved (atom nil)]
       (with-redefs [auth/configured? (fn [_] true)
+                    timg/get-capabilities (constantly no-image-caps)
                     model-selector/sync-footer-model! (fn [_] nil)
                     ui/chat-history-get-thinking-hidden (fn [_] false)
                     cfg/save-setting! (fn [path value] (reset! saved [path value]))
@@ -631,6 +641,7 @@
           sl-ref (atom nil)
           saved (atom nil)]
       (with-redefs [auth/configured? (fn [_] true)
+                    timg/get-capabilities (constantly no-image-caps)
                     ui/chat-history-get-thinking-hidden (fn [_] false)
                     cfg/save-setting! (fn [path value] (reset! saved [path value]))
                     dock/mount! (capture-mount! sl-ref)
@@ -639,8 +650,8 @@
         (t/is (false? (:block-images @(:cfg ag))) "default off at startup")
         ((:handler (commands/find-command "settings")) cs "")
         (let [sl @sl-ref]
-          ;; row 1: block-images (after auto-compact; the terminal image rows
-          ;; insert above it only when the terminal supports images)
+          ;; row 1: block-images (right after auto-compact; the terminal
+          ;; image rows are stubbed away via no-image-caps)
           (protocols/handle-input sl "\u001b[B")
           (protocols/handle-input sl "\r")  ;; enter — false -> true
           (t/is (true? (:block-images @(:cfg ag))) "row toggles the agent knob")
@@ -665,6 +676,7 @@
           sl-ref (atom nil)
           saved (atom nil)]
       (with-redefs [auth/configured? (fn [_] true)
+                    timg/get-capabilities (constantly no-image-caps)
                     ui/chat-history-get-thinking-hidden (fn [_] false)
                     cfg/get-retry-settings-live
                     (fn [_] {:enabled true :max-retries 3 :base-delay-ms 2000})
@@ -712,6 +724,7 @@
           sl-ref (atom nil)
           saved (atom nil)]
       (with-redefs [auth/configured? (fn [_] true)
+                    timg/get-capabilities (constantly no-image-caps)
                     ui/chat-history-get-thinking-hidden (fn [_] false)
                     cfg/save-setting! (fn [path value] (reset! saved [path value]))
                     dock/mount! (capture-mount! sl-ref)

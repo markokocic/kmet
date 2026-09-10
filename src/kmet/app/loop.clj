@@ -305,7 +305,7 @@ Be precise and concise in your responses."}}]
     (:truncation result) (assoc :truncation (:truncation result))
     (:details result) (assoc :details (:details result))))
 
-(def blocked-image-placeholder
+(def ^:private blocked-image-placeholder
   "Text that replaces a blocked image in a provider request (pi:
    convertToLlmWithBlockImages — \"Image reading is disabled.\")."
   "Image reading is disabled.")
@@ -348,7 +348,12 @@ Be precise and concise in your responses."}}]
    images, and the transcript still renders them. Like pi (whose
    convertToLlmWithBlockImages wrapper sits in the agent loop while
    compaction calls the plain convertToLlm), the compaction/branch-summary
-   calls are NOT filtered."
+   calls are NOT filtered.
+
+   Defensive on shape: :images is dropped whatever the content (pi filters
+   any toolResult image), but the placeholder is only woven into the
+   canonical message shape — an extension-injected tool message carrying
+   string content is stripped without a content rewrite."
   [messages]
   (mapv (fn [m]
           (case (:role m)
@@ -356,11 +361,11 @@ Be precise and concise in your responses."}}]
                               (update m :content block-images-content)
                               m)
             :tool (if (seq (:images m))
-                    (-> m
-                        (dissoc :images)
-                        (assoc-in [:content 0 :content]
-                                  (append-blocked-placeholder
-                                   (-> m :content first :content))))
+                    (cond-> (dissoc m :images)
+                      (map? (first (:content m)))
+                      (assoc-in [:content 0 :content]
+                                (append-blocked-placeholder
+                                 (-> m :content first :content))))
                     m)
             m))
         messages))

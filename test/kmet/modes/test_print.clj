@@ -35,3 +35,19 @@
                                            ((:on-done ag-opts) "ok"))]
         (print-mode/run (assoc (opts) :messages ["hello" "world"]))
         (is (= "hello world" @seen))))))
+
+(deftest test-run-seeds-block-images
+  (testing "images.blockImages reaches the print-mode agent (pi: SDK-level)"
+    (let [seen (atom nil)]
+      (with-redefs [agent/run-agent-turn (fn [ag ag-opts]
+                                           (reset! seen (:block-images @(:cfg ag)))
+                                           ((:on-done ag-opts) "ok"))]
+        (print-mode/run (assoc (opts) :config {:provider :opencode-go
+                                               :model "deepseek-v4-flash"
+                                               :images {:block-images true}}))
+        (is (true? @seen)))
+      (with-redefs [agent/run-agent-turn (fn [ag ag-opts]
+                                           (reset! seen (:block-images @(:cfg ag)))
+                                           ((:on-done ag-opts) "ok"))]
+        (print-mode/run (opts))
+        (is (false? @seen) "default off")))))

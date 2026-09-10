@@ -93,7 +93,10 @@
             ;; block — enabled gates threshold to 0 (off)
             :loop-guard-enabled (:enabled (cfg/get-loop-guard-settings config))
             :loop-guard-threshold (:threshold (cfg/get-loop-guard-settings config))
-            :thinking-loop-guard-enabled (get config :thinking-loop-guard-enabled true))
+            :thinking-loop-guard-enabled (get config :thinking-loop-guard-enabled true)
+            ;; pi: images.blockImages — stripped per request in call-llm (pi
+            ;; applies it at the SDK level, so --print honors it too)
+            :block-images (cfg/get-block-images config))
         _ (agent/init-scoped-models! ag config)
         result-promise (promise)
         ;; pi: session.prompt expands skill commands + prompt templates
