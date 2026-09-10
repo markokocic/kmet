@@ -20,7 +20,7 @@
         ;; SHA*withRSA + RSA KeyFactory) lands in jolt-lang/crypto; swap the
         ;; url + sha to jolt-lang/crypto@<merge sha> when it does.
         io.github.jolt-lang/crypto {:git/url "https://github.com/markokocic/crypto.git"
-                                    :git/sha "4a5c4166658a89f38368e2607dbd232c2705adb9"}
+                                    :git/sha "8afd87989e3ec265f8d6d6d281ff0f2c10a172f8"}
         ;; babashka.http-client on Jolt: the jolt-lang/http-client library's
         ;; java.net.http shims (RFC 0014 :jolt/provides over BSD sockets +
         ;; OpenSSL + libz via jolt.ffi) run the real org.babashka/http-client
