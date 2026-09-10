@@ -2,7 +2,8 @@
   "Settings selector panel (pi: showSettingsSelector +
    settings-selector.ts) — pi's rows backed by kmet machinery: thinking
    level (the current model's available levels), hide-thinking, auto-compact,
-   steering/follow-up queue modes, HTTP idle timeout, cache-miss notices,
+   inline images (show-images / image-width, terminal-gated, plus the
+   ungated block-images), steering/follow-up queue modes, HTTP idle timeout, cache-miss notices,
    tree filter mode, editor/output padding, autocomplete max items, hardware
    cursor, the retry block (settings.edn :retry — enabled / max-retries /
    base-delay-ms, applied live to the agent), the repeat-loop guard
@@ -129,7 +130,8 @@
         base-items (into []
                          (concat [(bool-row :auto-compact "Auto-compact" (:auto-compact @(:cfg ag)))]
                                  img-rows
-                                 [{:id :steering-mode
+                                 [(bool-row :block-images "Block images" (:block-images @(:cfg ag)))
+                                  {:id :steering-mode
                                    :label "Steering mode"
                                    :value (name (:steering-mode @(:cfg ag)))
                                    :values ["one-at-a-time" "all"]}
@@ -234,6 +236,10 @@
                            (let [w (parse-long value)]
                              (swap! subs/image-settings-atom assoc :image-width-cells w)
                              (cfg/save-setting! [:terminal :image-width-cells] w))
+                           :block-images
+                           (let [blocked? (= value "true")]
+                             (agent/set-block-images! ag blocked?)
+                             (cfg/save-setting! [:images :block-images] blocked?))
                            :steering-mode
                            (let [mode (keyword value)]
                              (swap! (:cfg ag) assoc :steering-mode mode)

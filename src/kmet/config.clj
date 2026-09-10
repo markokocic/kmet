@@ -50,6 +50,9 @@
    ;; pi: terminal.showImages / terminal.imageWidthCells — inline image
    ;; display (terminal capability is consulted at render time)
    :terminal {:show-images true :image-width-cells 60}
+   ;; pi: images.blockImages — true strips every image from provider calls
+   ;; (transcript untouched; see kmet.app.loop/block-message-images)
+   :images {:block-images false}
    :system-prompt nil
    :append-system-prompt nil
    :thinking :off
@@ -182,6 +185,14 @@
   [config]
   (let [w (get-in config [:terminal :image-width-cells])]
     (if (number? w) (max 1 (long w)) 60)))
+
+(defn get-block-images
+  "Whether image blocks are stripped from provider calls — the transcript
+   still shows them (pi: images.blockImages — default false). Read live per
+   request by the agent loop, so a mid-session toggle takes effect on the
+   next call."
+  [config]
+  (boolean (get-in config [:images :block-images])))
 
 (defn load-config
   "Load and merge configuration from user and project directories.

@@ -603,16 +603,51 @@
         ((:handler (commands/find-command "settings")) cs "")
         (let [sl @sl-ref]
           (t/is (some? sl) "settings list shown")
-          ;; row order: auto-compact steering follow-up http-idle
-          ;; http-total http-transport cache-miss tree-filter thinking … —
-          ;; navigate to the thinking row
-          (dotimes [_ 8]
+          ;; row order: auto-compact block-images steering follow-up
+          ;; http-idle http-total http-transport cache-miss tree-filter
+          ;; thinking … — navigate to the thinking row
+          (dotimes [_ 9]
             (protocols/handle-input sl "\u001b[B"))
           ;; Enter (pi: activateItem) cycles the selected row
           (protocols/handle-input sl "\r")
           (t/is (not= :off @(:thinking ag)) "thinking row cycles the session level")
           (t/is (= [[:thinking] @(:thinking ag)] @saved)
                 "thinking change persisted to settings (path + level)"))))))
+
+(deftest test-settings-block-images-row
+  (testing "/settings Block images row flips the agent knob and persists
+            (pi: block-images, ungated — unlike the terminal image rows)"
+    (install-app-keybindings!)
+    (commands/clear-commands!)
+    (m/load-catalogs!)
+    ((var inter/register-builtin-commands!) cfg/default-config)
+    (let [ag (agent/make-agent-state :provider :opencode-go :model "deepseek-v4-flash")
+          cs {:agent-state (atom ag)
+              :chat-history nil
+              :footer-comp nil
+              :footer-provider nil
+              :config cfg/default-config
+              :tui nil}
+          sl-ref (atom nil)
+          saved (atom nil)]
+      (with-redefs [auth/configured? (fn [_] true)
+                    ui/chat-history-get-thinking-hidden (fn [_] false)
+                    cfg/save-setting! (fn [path value] (reset! saved [path value]))
+                    dock/mount! (capture-mount! sl-ref)
+                    tui/tui-set-focus (fn [_ _])
+                    tui/tui-request-render (fn [_])]
+        (t/is (false? (:block-images @(:cfg ag))) "default off at startup")
+        ((:handler (commands/find-command "settings")) cs "")
+        (let [sl @sl-ref]
+          ;; row 1: block-images (after auto-compact; the terminal image rows
+          ;; insert above it only when the terminal supports images)
+          (protocols/handle-input sl "\u001b[B")
+          (protocols/handle-input sl "\r")  ;; enter — false -> true
+          (t/is (true? (:block-images @(:cfg ag))) "row toggles the agent knob")
+          (t/is (= [[:images :block-images] true] @saved) "blocked persisted")
+          (protocols/handle-input sl "\r")  ;; enter — true -> false
+          (t/is (false? (:block-images @(:cfg ag))) "cycling back unblocks")
+          (t/is (= [[:images :block-images] false] @saved) "unblocked persisted"))))))
 
 (deftest test-settings-retry-rows
   (testing "/settings retry rows apply live to the agent and persist"
@@ -640,11 +675,11 @@
         (t/is (= 3 (:max-retries @(:cfg ag))) "default retry wired at startup")
         ((:handler (commands/find-command "settings")) cs "")
         (let [sl @sl-ref]
-          ;; rows 0..15: auto-compact steering follow-up http-idle
-          ;; http-total http-transport cache-miss tree-filter thinking
-          ;; hide-thinking editor-pad output-pad autocomplete auto-retry
-          ;; max-retries base-delay
-          (dotimes [_ 13]
+          ;; rows 0..16: auto-compact block-images steering follow-up
+          ;; http-idle http-total http-transport cache-miss tree-filter
+          ;; thinking hide-thinking editor-pad output-pad autocomplete
+          ;; auto-retry max-retries base-delay
+          (dotimes [_ 14]
             (protocols/handle-input sl "\u001b[B")) ;; down → auto-retry
           (protocols/handle-input sl "\r") ;; enter — auto-retry true -> false
           (t/is (= 0 (:max-retries @(:cfg ag))) "disabled retry gates max-retries to 0")
@@ -686,9 +721,10 @@
           (http/set-transport! :platform)
           ((:handler (commands/find-command "settings")) cs "")
           (let [sl @sl-ref]
-            ;; rows 0..5: auto-compact steering follow-up http-idle
-            ;; http-total http-transport — navigate to the transport row
-            (dotimes [_ 5]
+            ;; rows 0..6: auto-compact block-images steering follow-up
+            ;; http-idle http-total http-transport — navigate to the
+            ;; transport row
+            (dotimes [_ 6]
               (protocols/handle-input sl "\u001b[B"))
             (protocols/handle-input sl "\r") ;; platform -> curl
             (t/is (= :curl (http/get-transport))

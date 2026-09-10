@@ -3266,6 +3266,8 @@
             :keep-recent-tokens (or (:keep-recent-tokens config) 20000)
             :http-idle-timeout-ms (:http-idle-timeout-ms config)
             :http-total-timeout-ms (get config :http-total-timeout-ms)
+            ;; pi: images.blockImages — strip image blocks from provider calls
+            :block-images (cfg/get-block-images config)
             :thinking (let [model-rec (models/get-model provider model)
                             raw-level (:thinking config :off)]
                         (if (:reasoning model-rec)

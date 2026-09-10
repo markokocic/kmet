@@ -848,6 +848,106 @@
                (:content llm-user))
             "image blocks reach the LLM call in kmet message format"))))
 
+;; ─── Block images (pi: images.blockImages / convertToLlmWithBlockImages) ──
+
+(defn- run-turn-capturing-llm
+  "Run one turn on AGENT with a stubbed LLM call; returns the captured
+   send-message opts."
+  [agent & [opts]]
+  (let [sent (atom nil)]
+    (with-redefs [cfg/get-api-key (fn [_] "test-key")
+                  llm/send-message
+                  (fn [o]
+                    (reset! sent o)
+                    (future
+                      (when-let [on-done (:on-done o)]
+                        (on-done :stop))
+                      :done))]
+      @(loop/run-agent-turn agent (merge {:on-done (fn [_])
+                                          :on-error (fn [_])}
+                                         opts)))
+    @sent))
+
+(t/deftest test-loop-block-images-strips-wire-images
+  (let [agent (loop/make-agent-state :block-images true)
+        ;; a valid tool batch (assistant call + matching result) — an orphaned
+        ;; result would be dropped by drop-incomplete-tool-calls before the
+        ;; block-images filter runs
+        _ (swap! (:messages agent) conj
+                 {:role :assistant
+                  :content [{:type :text :text "reading"}]
+                  :tool-calls [{:id "t1" :name "read" :arguments {}}]})
+        _ (swap! (:messages agent) conj
+                 {:role :tool
+                  :content [{:type :tool_result
+                             :tool_use_id "t1"
+                             :content "Read image file [image/png]"}]
+                  :tool-name "read"
+                  :is-error false
+                  :images [{:data "AA" :mime-type "image/png"}]})
+        _ (swap! (:messages agent) conj
+                 {:role :custom
+                  :content [{:type :text :text "note"}
+                            {:type :image :data "BB" :mime-type "image/png"}]})
+        sent (run-turn-capturing-llm agent
+                                     {:message "look at this"
+                                      :images [{:type :image :data "CC" :mime-type "image/png"}]})
+        wire (:messages sent)
+        wire-user (first (filter #(= :user (:role %)) wire))
+        wire-tool (first (filter #(= :tool (:role %)) wire))
+        wire-custom (first (filter #(= :custom (:role %)) wire))]
+    (t/is (= [{:type :text :text "look at this"}
+              {:type :text :text "Image reading is disabled."}]
+             (:content wire-user))
+          "user image blocks become the disabled placeholder")
+    (t/is (nil? (:images wire-tool)) "tool-result images are dropped from the wire")
+    (t/is (= "Read image file [image/png]\nImage reading is disabled."
+             (-> wire-tool :content first :content))
+          "the tool result text carries the placeholder")
+    (t/is (= [{:type :text :text "note"}
+              {:type :text :text "Image reading is disabled."}]
+             (:content wire-custom))
+          "custom message images are stripped too (pi: custom→user then filter)")
+    (t/is (some #(seq (:images %)) @(:messages agent))
+          "the stored context keeps its images")
+    (t/is (= [{:type :text :text "look at this"}
+              {:type :image :data "CC" :mime-type "image/png"}]
+             (:content (first (filter #(= :user (:role %)) (loop/get-context agent)))))
+          "session/transcript user content is untouched")))
+
+(t/deftest test-loop-block-images-consecutive-dedupe
+  (let [agent (loop/make-agent-state :block-images true)
+        sent (run-turn-capturing-llm agent
+                                     {:message "two"
+                                      :images [{:type :image :data "AA" :mime-type "image/png"}
+                                               {:type :image :data "BB" :mime-type "image/png"}]})]
+    (t/is (= [{:type :text :text "two"}
+              {:type :text :text "Image reading is disabled."}]
+             (:content (first (filter #(= :user (:role %)) (:messages sent)))))
+          "consecutive placeholders collapse to one (pi dedupe)")))
+
+(t/deftest test-loop-block-images-off-passes-images-through
+  (let [agent (loop/make-agent-state)  ;; block-images defaults false
+        sent (run-turn-capturing-llm agent
+                                     {:message "look"
+                                      :images [{:type :image :data "AA" :mime-type "image/png"}]})]
+    (t/is (= [{:type :text :text "look"}
+              {:type :image :data "AA" :mime-type "image/png"}]
+             (:content (first (filter #(= :user (:role %)) (:messages sent)))))
+          "images pass through when the setting is off")))
+
+(t/deftest test-loop-set-block-images-live
+  (let [agent (loop/make-agent-state)]
+    (t/is (false? (:block-images @(:cfg agent))))
+    (loop/set-block-images! agent true)
+    (t/is (true? (:block-images @(:cfg agent))))
+    (let [sent (run-turn-capturing-llm agent
+                                       {:message "look"
+                                        :images [{:type :image :data "AA" :mime-type "image/png"}]})]
+      (t/is (not-any? #(= :image (:type %))
+                      (:content (first (filter #(= :user (:role %)) (:messages sent)))))
+            "a mid-session toggle applies to the next call (pi reads it per request)"))))
+
 ;; ─── Queues (steering / follow-up) ────────────────────────────────────────
 
 (t/deftest test-loop-steer-queues-message

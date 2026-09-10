@@ -71,7 +71,9 @@
    :images — a vector of {:type :image :data base64 :mime-type str} blocks
    attached to the initial user message; they flow to the provider as OpenAI
    image_url / Anthropic image blocks. Input hooks receive and can transform
-   :images (extensions/apply-input-hooks)."
+   :images (extensions/apply-input-hooks). The :block-images setting (pi:
+   images.blockImages) strips every image from the wire messages in call-llm,
+   leaving the transcript and session intact."
   (:require [kmet.libs.json :as json]
             [clojure.string :as str]
             [kmet.ai.llm :as llm]
@@ -145,8 +147,10 @@
          httpIdleTimeoutMs; 0 disables), :http-total-timeout-ms (default nil
          = the idle timeout, pi: timeoutMs ?? httpIdleTimeoutMs — an explicit
          positive number overrides the total request deadline; 0 disables it
-         (falls back to idle); nil uses idle)"
-  [& {:keys [model provider system session on-event thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key scoped-models system-prompt-opts compact-token-threshold context-window compact-reserve-tokens keep-recent-tokens http-idle-timeout-ms http-total-timeout-ms auto-compact loop-guard-enabled loop-guard-threshold thinking-loop-guard-enabled]
+         (falls back to idle); nil uses idle),
+         :block-images (default false, pi: images.blockImages — strip image
+         blocks from provider calls; transcript and session untouched)"
+  [& {:keys [model provider system session on-event thinking base-url api-type steering-mode follow-up-mode max-retries base-delay-ms before-tool-call after-tool-call system-prompt-override transform-context prepare-next-turn should-stop-after-turn get-api-key scoped-models system-prompt-opts compact-token-threshold context-window compact-reserve-tokens keep-recent-tokens http-idle-timeout-ms http-total-timeout-ms auto-compact loop-guard-enabled loop-guard-threshold thinking-loop-guard-enabled block-images]
       :or {provider :opencode-go
            thinking :off
            steering-mode :all
@@ -159,6 +163,7 @@
            keep-recent-tokens 20000
            http-idle-timeout-ms 300000
            http-total-timeout-ms nil
+           block-images false
            loop-guard-enabled true
            loop-guard-threshold 3
            thinking-loop-guard-enabled true
@@ -187,6 +192,7 @@ Be precise and concise in your responses."}}]
                                 :steering-mode steering-mode
                                 :follow-up-mode follow-up-mode
                                 :auto-compact (boolean auto-compact)
+                                :block-images (boolean block-images)
                                 :context-window context-window
                                 :loop-guard-enabled (boolean loop-guard-enabled)
                                 :loop-guard-threshold (max 2 (long loop-guard-threshold))
@@ -298,6 +304,66 @@ Be precise and concise in your responses."}}]
     (:images result) (assoc :images (:images result))
     (:truncation result) (assoc :truncation (:truncation result))
     (:details result) (assoc :details (:details result))))
+
+(def blocked-image-placeholder
+  "Text that replaces a blocked image in a provider request (pi:
+   convertToLlmWithBlockImages — \"Image reading is disabled.\")."
+  "Image reading is disabled.")
+
+(defn- append-blocked-placeholder
+  "Append the blocked-image placeholder to a tool result's own content
+   (string or block vector). One placeholder stands for any number of
+   images, matching pi's consecutive-placeholder dedupe in
+   convertToLlmWithBlockImages."
+  [content]
+  (cond
+    (nil? content) blocked-image-placeholder
+    (string? content) (if (str/blank? content)
+                        blocked-image-placeholder
+                        (str content "\n" blocked-image-placeholder))
+    (vector? content) (conj (vec content) {:type :text :text blocked-image-placeholder})
+    :else blocked-image-placeholder))
+
+(defn- block-images-content
+  "Replace every image block in a content vector with the blocked-image
+   placeholder text block, collapsing consecutive placeholders (pi:
+   convertToLlmWithBlockImages)."
+  [content]
+  (let [placeholder {:type :text :text blocked-image-placeholder}]
+    (reduce (fn [acc b]
+              (let [b (if (shared/image-block? b) placeholder b)]
+                (if (and (= b placeholder) (= (peek acc) placeholder))
+                  acc
+                  (conj acc b))))
+            []
+            content)))
+
+(defn- block-message-images
+  "pi: convertToLlmWithBlockImages — with :block-images on, strip every image
+   from the wire messages, replacing it with a placeholder text (kmet carries
+   user/custom images as content blocks and tool-result images in the
+   message's :images; pi reaches the same set — its custom→user conversion
+   happens before the filter, so custom images are caught too). Applied to
+   the LLM request only: the stored context and the session keep their
+   images, and the transcript still renders them. Like pi (whose
+   convertToLlmWithBlockImages wrapper sits in the agent loop while
+   compaction calls the plain convertToLlm), the compaction/branch-summary
+   calls are NOT filtered."
+  [messages]
+  (mapv (fn [m]
+          (case (:role m)
+            (:user :custom) (if (vector? (:content m))
+                              (update m :content block-images-content)
+                              m)
+            :tool (if (seq (:images m))
+                    (-> m
+                        (dissoc :images)
+                        (assoc-in [:content 0 :content]
+                                  (append-blocked-placeholder
+                                   (-> m :content first :content))))
+                    m)
+            m))
+        messages))
 
 (defn drop-incomplete-tool-calls
   "Defensive repair of a corrupted conversation: strict providers (OpenAI-style,
@@ -1069,6 +1135,13 @@ Be precise and concise in your responses."}}]
         ;; session (process death between recording an assistant tool-call
         ;; message and its results) — strict providers reject those.
         messages (drop-incomplete-tool-calls messages)
+        ;; pi: convertToLlmWithBlockImages — with :block-images on, strip
+        ;; every image from the wire messages (the transcript and session
+        ;; keep theirs). Read per request, so a mid-session toggle applies
+        ;; to the next call.
+        messages (if (:block-images @(:cfg agent))
+                   (block-message-images messages)
+                   messages)
         messages (if system
                    (into [{:role :system :content [{:type :text :text system}]}]
                          (vec messages))
@@ -2256,6 +2329,13 @@ Be precise and concise in your responses."}}]
       (set-scoped-models!
        agent (mapv (fn [m] (str (name (:provider m)) "/" (:id m))) models))))
   agent)
+
+(defn set-block-images!
+  "Block images from provider calls live (pi: setBlockImages) — the next
+   request strips every image block (see block-message-images); the
+   transcript and the stored session keep theirs."
+  [agent blocked?]
+  (swap! (:cfg agent) assoc :block-images (boolean blocked?)))
 
 (defn set-auto-compact!
   "Toggle proactive compaction live (pi: setAutoCompact); overflow recovery

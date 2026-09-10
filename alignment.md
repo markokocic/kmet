@@ -144,7 +144,7 @@ list/config` dispatch from `core.clj` to `kmet.package-manager` (pi
 | **Mermaid diagram rendering** | `modes/interactive/components/mermaid.ts` + `markdown.mermaid` setting (`off`/`final`/`streaming`) | **Postponed indefinitely** (2026-09-10; rationale in `src/kmet/tui/tui.md` §14) |
 | **LaTeX rendering** (`$…$`, `$$…$$`) | `packages/tui/src/latex.ts`, wired in `tui/src/components/markdown.ts` | **Postponed indefinitely** (same) |
 | **Alt-screen search** (search overlay over the transcript) | `packages/tui/src/alt-screen-search.ts`, `tui-alt-screen.ts` | **Postponed indefinitely** (same — needs an alt-screen mode) |
-| **Images in chat** | `terminal.showImages`, `terminal.imageWidthCells`, `images.autoResize`, `images.blockImages` settings; `show-images-selector.ts` | **Partial** — TUI half **done** (`tui.md` §14 P2): `:terminal {:show-images :image-width-cells}` settings, terminal-support-gated `/settings` rows, and inline images (or the `imageFallback` text indicator when off/unsupported) in tool results and user/custom messages. The wire half (`images.autoResize`, `images.blockImages`) rides the provider work |
+| **Images in chat** | `terminal.showImages`, `terminal.imageWidthCells`, `images.autoResize`, `images.blockImages` settings; `show-images-selector.ts` | **Partial** — `tui.md` §14 P2 done: `:terminal {:show-images :image-width-cells}` settings, terminal-support-gated `/settings` rows, and inline images (or the `imageFallback` text indicator when off/unsupported) in tool results and user/custom messages. `images.blockImages` done: `:images {:block-images}` setting + ungated `/settings` row, stripped per request in `app/loop.clj/call-llm` (pi: convertToLlmWithBlockImages — placeholder text, consecutive dedupe, stored context untouched). **Missing**: `images.autoResize` (pi runs a Photon WASM resize pipeline; babashka has no ImageIO/AWT — needs a resizer backend decision, see `app/tools/read.clj`)
 | **Cache-miss notices** | `showCacheMissNotices` setting | Done — `:show-cache-miss-notices` setting, `session/detect-cache-miss` (pi detectMiss), notice at agent-end (≥ 20k tokens) |
 | **Skill invocation presentation** | `components/skill-invocation-message.ts` | **Done** — `kmet.app.skills/parse-skill-block` + `kmet.app.ui.skill-message`: a `/skill:name` block renders as `[skill] name (ctrl+o to expand)` (collapsed) or the name + body as Markdown (expanded), with the trailing args as a normal user message below. Live and replay share the parse; the session still stores the expanded text |
 | **Custom entry rendering** | `registerEntryRenderer` + `components/custom-entry.ts` | Done — `extensions/register-entry-renderer!` + live entry sink; rendered at replay and on append (pi registerEntryRenderer + CustomEntryComponent) |
@@ -161,7 +161,8 @@ kmet (`config.clj`) covers: provider/model/thinking/theme/session-dir/
 http-idle-timeout-ms/system-prompt/append-system-prompt/retry
 (enabled/max-retries/base-delay-ms)/enabled-models/hide-thinking-block/
 extensions/skills/prompts/themes dirs, compaction thresholds, terminal image
-display (`:terminal` — show-images/image-width-cells), `.kmet/SYSTEM.md` +
+display (`:terminal` — show-images/image-width-cells), provider image
+blocking (`:images` — block-images), `.kmet/SYSTEM.md` +
 `APPEND_SYSTEM.md` discovery, `KMET_PROVIDER`/`KMET_MODEL` env vars.
 
 Missing (pi `docs/settings.md`):
@@ -182,7 +183,7 @@ Missing (pi `docs/settings.md`):
 | `steeringMode`, `followUpMode` | queue drain mode (kmet hardcodes `:all` in `app/loop.clj`; pi defaults `one-at-a-time`) |
 | `transport`, `websocketConnectTimeoutMs` | provider transport selection |
 | `terminal.clearOnShrink` | terminal display (the `terminal.showImages` / `terminal.imageWidthCells` rows are done — see §2) |
-| `images.autoResize`, `images.blockImages` | image handling (wire half — rides the provider work) |
+| `images.autoResize` | image resize before sending (needs a resizer backend — babashka has no ImageIO/AWT; `images.blockImages` is done — see §2) |
 | `shellPath`, `shellCommandPrefix` | shell customization |
 | `markdown.codeBlockIndent`, `markdown.mermaid` | markdown rendering |
 | `enableSkillCommands` | register skills as `/skill:name` commands |

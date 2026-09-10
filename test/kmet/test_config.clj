@@ -325,6 +325,13 @@
     (t/is (= 60 (cfg/get-image-width-cells {:terminal {:image-width-cells "wide"}}))
           "non-numeric values fall back to the default")))
 
+(t/deftest test-get-block-images
+  (t/testing "block-images defaults to false (pi: images.blockImages)"
+    (t/is (false? (cfg/get-block-images {})))
+    (t/is (false? (cfg/get-block-images cfg/default-config)))
+    (t/is (false? (cfg/get-block-images {:images {:block-images false}})))
+    (t/is (true? (cfg/get-block-images {:images {:block-images true}})))))
+
 (t/deftest test-get-tree-filter-mode
   (t/is (= :default (cfg/get-tree-filter-mode {})))
   (t/is (= :no-tools (cfg/get-tree-filter-mode {:tree-filter-mode :no-tools})))
