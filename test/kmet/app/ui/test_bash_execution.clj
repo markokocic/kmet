@@ -20,6 +20,35 @@
     (be/bash-execution-set-complete! c 0 false)
     (protocols/dispose c)))
 
+(t/deftest test-bash-execution-border-sets
+  ;; the frame glyphs come from a kmet.tui.border set (R5): the default is
+  ;; the pre-R5 hardcoded box, :ascii degrades it, :none drops the frame
+  ;; and keeps the content
+  (let [render (fn [style]
+                 (let [c (be/make-bash-execution :command "ls" :border style)
+                       lines (protocols/render c 20)]
+                   (be/bash-execution-set-complete! c 0 false)
+                   (protocols/dispose c)
+                   (mapv u/strip-ansi-codes lines)))]
+    (t/is (= "┌──────────────────┐" (first (render nil))) "default frame unchanged")
+    (t/is (= "│ $ ls             │" (second (render nil))))
+    (t/testing ":ascii"
+      (let [lines (render :ascii)]
+        (t/is (= "+------------------+" (first lines)))
+        (t/is (= "| $ ls             |" (second lines)))))
+    (t/testing ":hidden keeps the frame's footprint without ink"
+      (let [lines (render :hidden)]
+        (t/is (= "                    " (first lines)))
+        (t/is (= "  $ ls              " (second lines)))))
+    (t/testing ":none drops the frame entirely"
+      (let [lines (render :none)]
+        (t/is (= " $ ls             " (first lines)))
+        (t/is (= (- (count (render nil)) 2) (count lines))
+              "the two border lines are gone, the content is untouched")))
+    (t/testing "an unknown style fails at construction"
+      (t/is (thrown-with-msg? Exception #"unknown border style"
+                              (be/make-bash-execution :command "ls" :border :asci))))))
+
 (t/deftest test-bash-execution-render-with-output
   ;; Collapsed preview renders the last lines plus the expand hint.
   (let [c (be/make-bash-execution :command "ls" :exclude-from-context? false)

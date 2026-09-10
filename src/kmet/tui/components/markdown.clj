@@ -2,9 +2,11 @@
   "Markdown to ANSI-styled terminal output.
    Port of @earendil-works/pi-tui Markdown.
    The tokenizer is kmet.libs.markdown/parse (pure data, no ANSI); this
-   component walks the token AST and applies theme, padding, and word-wrap."
+   component walks the token AST and applies theme, padding, and word-wrap.
+   Table borders come from a kmet.tui.border set (tui.md §14 R5)."
   (:require [clojure.string :as str]
             [kmet.libs.terminal-image :as timg]
+            [kmet.tui.border :as border]
             [kmet.tui.utils :as u]
             [kmet.tui.macros :refer [track! defcomponent]]
             [kmet.libs.markdown :as md]))
@@ -221,10 +223,11 @@
 
 (defn- emit-table-row!
   "Push the visual lines of one table ROW onto RESULT: each cell wrapped to
-   its COLUMN-WIDTHS entry, padded, joined with themed │ separators. Header
-   cells render bold when BOLD?."
-  [result row column-widths theme border-fn bold? left-pad]
-  (let [wrapped (mapv (fn [c w] (u/wrap-text-with-ansi c (max 1 w))) row column-widths)
+   its COLUMN-WIDTHS entry, padded, joined with themed cell separators taken
+   from B (a kmet.tui.border set). Header cells render bold when BOLD?."
+  [result row column-widths theme border-fn bold? left-pad b]
+  (let [v (:left b)
+        wrapped (mapv (fn [c w] (u/wrap-text-with-ansi c (max 1 w))) row column-widths)
         height (reduce max 1 (map count wrapped))]
     (dotimes [i height]
       (let [cells (mapv (fn [wl w]
@@ -232,16 +235,27 @@
                                 padded (str s (apply str (repeat (max 0 (- w (u/visible-width s))) \space)))]
                             (if bold? ((:bold theme) padded) padded)))
                         wrapped column-widths)]
-        (vswap! result conj (str left-pad (border-fn "│ ")
-                                 (str/join (str " " (border-fn "│") " ") cells)
-                                 " " (border-fn "│")))))))
+        (vswap! result conj (str left-pad (border-fn (str v " "))
+                                 (str/join (str " " (border-fn v) " ") cells)
+                                 " " (border-fn v)))))))
+
+(defn- table-line
+  "One table rule line: LEFT and RIGHT corners and MID junctions around a
+   run of H per column. The set's glyphs decide how a table degrades —
+   :ascii turns every junction into +, :hidden into a blank line of the
+   same width."
+  [h left mid right column-widths]
+  (let [run (fn [w] (apply str (repeat w h)))]
+    (str left h (str/join (str h mid h) (map run column-widths)) h right)))
 
 (defn- render-table
-  "Render a :table token: box-drawn borders, bold header, a separator between
-   every data row, width-aware columns with cell wrapping (pi's renderTable
-   port). Falls back to the raw markdown when the table cannot fit."
-  [result t theme content-width left-pad default-style]
+  "Render a :table token: box-drawn borders from BORDER-SET, bold header, a
+   separator between every data row, width-aware columns with cell wrapping
+   (pi's renderTable port). Falls back to the raw markdown when the table
+   cannot fit."
+  [result t theme content-width left-pad default-style border-set]
   (let [num-cols (count (:header t))
+        b (or border-set border/normal)
         border-fn (or (:table-border theme) identity)
         border-overhead (inc (* 3 num-cols))
         available-for-cells (- content-width border-overhead)
@@ -297,14 +311,14 @@
                                       (recur ws' rem')
                                       ws'))
                                   ws))))
-            top (str "┌─" (str/join "─┬─" (map #(apply str (repeat % "─")) column-widths)) "─┐")
-            sep (str "├─" (str/join "─┼─" (map #(apply str (repeat % "─")) column-widths)) "─┤")
-            bot (str "└─" (str/join "─┴─" (map #(apply str (repeat % "─")) column-widths)) "─┘")]
+            top (table-line (:top b) (:top-left b) (:tee-down b) (:top-right b) column-widths)
+            sep (table-line (:top b) (:tee-right b) (:cross b) (:tee-left b) column-widths)
+            bot (table-line (:bottom b) (:bottom-left b) (:tee-up b) (:bottom-right b) column-widths)]
         (vswap! result conj (str left-pad (border-fn top)))
-        (emit-table-row! result header-styled column-widths theme border-fn true left-pad)
+        (emit-table-row! result header-styled column-widths theme border-fn true left-pad b)
         (vswap! result conj (str left-pad (border-fn sep)))
         (doseq [[i row] (map-indexed vector row-styled)]
-          (emit-table-row! result row column-widths theme border-fn false left-pad)
+          (emit-table-row! result row column-widths theme border-fn false left-pad b)
           (when (< i (dec (count row-styled)))
             (vswap! result conj (str left-pad (border-fn sep)))))
         (vswap! result conj (str left-pad (border-fn bot)))))))
@@ -358,8 +372,9 @@
    Each line is left-padded and right-padded to the content width, matching
    the original line-oriented renderer's output exactly. DEFAULT-STYLE tints
    text content (paragraphs, list items, table cells) but not code blocks,
-   headings, quotes, or hr — mirroring pi's defaultTextStyle."
-  [result t theme content-width left-pad default-style]
+   headings, quotes, or hr — mirroring pi's defaultTextStyle. TABLE-BORDER
+   is the kmet.tui.border set table glyphs come from (nil = :normal)."
+  [result t theme content-width left-pad default-style table-border]
   (case (:type t)
     :blank
     (vswap! result conj (str left-pad (apply str (repeat content-width \space))))
@@ -389,7 +404,7 @@
     (render-code result t theme content-width left-pad "")
 
     :table
-    (render-table result t theme content-width left-pad default-style)
+    (render-table result t theme content-width left-pad default-style table-border)
 
     :quote
     (let [border ((:quote-border theme) "▎")
@@ -423,7 +438,7 @@
 
 (defcomponent Markdown nil [text-atom theme-atom padding-x-atom
                             default-style-atom transform-atom
-                            cache-atom]
+                            border-atom cache-atom]
   (render [this width]
     (track! this width
       (let [padding-x @padding-x-atom
@@ -444,7 +459,7 @@
                        (update tokens (dec (count tokens)) trim-code-fence)
                        tokens)]
           (doseq [t tokens]
-            (render-block result t theme content-width left-pad default-style)))
+            (render-block result t theme content-width left-pad default-style @border-atom)))
         @result))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
@@ -452,19 +467,24 @@
 (defn make-markdown
   "Create a Markdown display component.
    Options: :theme (default-theme), :padding-x (default 1),
+   :border — a kmet.tui.border set for table glyphs (default :normal;
+   :ascii for terminals that cannot draw box characters), resolved here so
+   an unknown style fails at construction,
    :default-style — per-line base style fn applied to text content
    (paragraphs, list items, table cells) but NOT block-level styled elements
    (code blocks, headings, quotes, hr), mirroring pi's defaultTextStyle,
    :transform — extension markdown transformer fn (fn [text {:keys
    [available-width]}]) applied per render before parsing (pi: Markdown's
    transform)."
-  [text & {:keys [theme padding-x default-style transform] :or {padding-x 1}}]
+  [text & {:keys [theme padding-x default-style transform border]
+           :or {padding-x 1}}]
   (let [t (or theme default-theme)]
     (map->Markdown {:text-atom (atom text)
                     :theme-atom (atom t)
                     :padding-x-atom (atom padding-x)
                     :default-style-atom (atom default-style)
                     :transform-atom (atom transform)
+                    :border-atom (atom (border/resolve border))
                     :cache-atom (atom nil)})))
 
 (defn markdown-set-text! [md text]

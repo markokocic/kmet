@@ -3,6 +3,7 @@
             [clojure.string :as str]
             [kmet.libs.terminal-image :as timg]
             [kmet.tui.core :as core]
+            [kmet.tui.hiccup :as h]
             [kmet.tui.theme :as theme]
             [kmet.tui.utils :as u]
             [kmet.tui.components.markdown :as md]))
@@ -338,6 +339,40 @@
       (t/is (= 5 (count l1)))
       (t/is (= "│ 1 │ 2 │" (nth l1 3)))
       (t/is (= "└───┴───┘" (nth l1 4))))))
+
+(t/deftest test-markdown-table-border-styles
+  ;; table glyphs come from a kmet.tui.border set (R5): the default is
+  ;; byte-identical to the pre-R5 hardcoded glyphs, :ascii degrades every
+  ;; junction, :hidden keeps the footprint with no ink
+  (let [table "| a | b |\n|---|---|\n| 1 | 2 |"
+        render (fn [style]
+                 (mapv strip-ansi
+                       (core/render (md/make-markdown table :padding-x 0 :border style) 30)))]
+    (t/testing "the default set is :normal"
+      (let [dflt (mapv strip-ansi (core/render (md/make-markdown table :padding-x 0) 30))]
+        (t/is (= dflt (render :normal)))
+        (t/is (= ["┌───┬───┐" "│ a │ b │" "├───┼───┤" "│ 1 │ 2 │" "└───┴───┘"]
+                 (render nil)))))
+    (t/testing ":ascii degrades every glyph"
+      (t/is (= ["+---+---+" "| a | b |" "+---+---+" "| 1 | 2 |" "+---+---+"]
+               (render :ascii))))
+    (t/testing ":hidden keeps the cells and the footprint, drops the ink"
+      (let [lines (render :hidden)]
+        (t/is (= (apply str (repeat 9 \space)) (first lines)))
+        (t/is (= "  a   b  " (second lines)))))
+    (t/testing "a partial map merges over :normal"
+      (t/is (= "┌===┬===┐" (first (render {:top "="})))))
+    (t/testing ":none falls back to the default — a table is structural"
+      (t/is (= (render :normal) (render :none))))
+    (t/testing "an unknown style fails at construction"
+      (t/is (thrown-with-msg? Exception #"unknown border style"
+                              (md/make-markdown table :padding-x 0 :border :asci))))
+    (t/testing "the DSL tag forwards :border"
+      (t/is (= ["+---+---+"]
+               (mapv strip-ansi
+                     (take 1 (h/render-lines
+                              [:markdown {:text table :padding-x 0 :border :ascii}]
+                              30))))))))
 
 (t/deftest test-markdown-table-single-column
   (let [m (md/make-markdown "| x |\n|---|\n| y |" :padding-x 0)

@@ -352,6 +352,27 @@
       (t/is (str/starts-with? (first lines) "=="))
       (t/is (str/ends-with? (last lines) "==")))))
 
+(t/deftest test-editor-border-set
+  ;; the rule glyph above and below the text comes from a kmet.tui.border
+  ;; set (R5); :none keeps the default bar, since a rule component with no
+  ;; glyph would have nothing to draw
+  (let [rule (fn [style] (first (core/render (editor/make-editor :height 3
+                                                                 :border style)
+                                             10)))]
+    (t/is (= "──────────" (rule nil)) "default is :normal")
+    (t/is (= "──────────" (rule :normal)))
+    (t/is (= "----------" (rule :ascii)))
+    (t/is (= "          " (rule :hidden)) "same footprint, no ink")
+    (t/is (= "──────────" (rule :none)) "a rule keeps its default glyph")
+    (t/testing "an unknown style fails at construction"
+      (t/is (thrown-with-msg? Exception #"unknown border style"
+                              (editor/make-editor :border :asci))))))
+
+(t/deftest test-editor-border-fn-styles-the-chosen-glyph
+  ;; border-fn wraps whatever glyph the set provides
+  (let [e (editor/make-editor :height 3 :border :ascii :border-fn (fn [s] (str "<" s ">")))]
+    (t/is (str/starts-with? (first (core/render e 6)) "<->"))))
+
 ;; ─── Edge cases ──────────────────────────────────────────────────────────
 
 (t/deftest test-editor-backspace-at-start

@@ -13,7 +13,9 @@
 
    Reconciliation (tui.md §2.3): ONE keyed diff drives everything — the
    ComponentFn wrapper's child list AND the fill of every host container
-   (through per-tag children lenses). Matching is explicit :key first,
+   (through per-tag children lenses). Matching is explicit :key first
+   (from the props map or, reagent-style, from the element vector's own
+   metadata — ^{:key k} [:text …]; props win when both are given),
    fallback match-kind (tag / fn value / record payload / string);
    unmatched previous children are disposed (children-first contract),
    matched ones are reused — identity survives reorders by key, so stateful
@@ -148,18 +150,17 @@
                                        (or padding-y 1)
                                        bg-fn))
                :primary :text}
-   :markdown  {:ctor (fn [{:keys [text theme padding-x default-style transform]}]
+   :markdown  {:ctor (fn [{:keys [text theme padding-x default-style transform border]}]
                        (markdown/make-markdown text
                                                :theme theme
                                                :padding-x (or padding-x 1)
                                                :default-style default-style
-                                               :transform transform))
+                                               :transform transform
+                                               :border border))
                :primary :text}
    :spacer    {:ctor (fn [{:keys [lines]}] (spacer/make-spacer (or lines 1)))}
-   :dynamic-border {:ctor (fn [{:keys [color-fn]}]
-                            (if color-fn
-                              (dynamic-border/make-dynamic-border color-fn)
-                              (dynamic-border/make-dynamic-border)))
+   :dynamic-border {:ctor (fn [{:keys [color-fn border]}]
+                            (dynamic-border/make-dynamic-border color-fn border))
                     :primary :color-fn}
    :truncated-text {:ctor (fn [{:keys [text padding-x padding-y]}]
                             (truncated-text/make-truncated-text text
@@ -230,12 +231,13 @@
                                                                            on-escape))
                              sl))
                    :primary :items}
-   :editor       {:ctor (fn [{:keys [text height padding-x border-fn
+   :editor       {:ctor (fn [{:keys [text height padding-x border-fn border
                                      keybindings terminal-rows
                                      on-submit on-change]}]
                           (let [ed (editor/make-editor :height (or height 12)
                                                        :padding-x (or padding-x 0)
                                                        :border-fn border-fn
+                                                       :border border
                                                        :keybindings keybindings
                                                        :terminal-rows terminal-rows)]
                             (when text (editor/editor-set-text! ed text))
@@ -409,17 +411,20 @@
 
 (defn- parse-host
   "[:tag ...] → desired item. Validates before any construction: unknown
-   tags and children-on-leaf throw here."
-  [tag content]
-  (let [[spec props children meta] (normalize-element tag content)]
+   tags and children-on-leaf throw here. META-KEY is the element vector's
+   ^{:key k} metadata (nil when absent); an explicit :key prop wins over
+   it, since props are the more specific form."
+  [tag content meta-key]
+  (let [[spec props children meta] (normalize-element tag content)
+        key (or (:key meta) meta-key)]
     (when (and (seq children) (nil? (:lens spec)))
       (throw (ex-info
               (str "kmet.tui.hiccup: children given to leaf tag " tag
                    " — leaves take only props")
               {:tag tag :children children})))
     (check-ref! tag (:ref meta))
-    {:kind ::host :mkey (if-some [k (:key meta)] {::user-key k ::kind ::host} tag)
-     :key (:key meta) :ref (:ref meta)
+    {:kind ::host :mkey (if-some [k key] {::user-key k ::kind ::host} tag)
+     :key key :ref (:ref meta)
      :tag tag :spec spec :props props :nodes children}))
 
 (defn- check-ref!
@@ -434,23 +439,29 @@
 
 (defn- parse-node
   "One tree node → desired item, or nil to skip (nil nodes — the
-   when/when-let support). Seqs never reach here (flattened earlier)."
+   when/when-let support). Seqs never reach here (flattened earlier).
+   An element's key may come from its props (:key) or, reagent-style, from
+   the vector's own metadata (^{:key k} [:text …]) — props win; metadata on
+   a non-vector child (record, string, entry map) is ignored, those match
+   by identity or kind."
   [node stack?]
   (cond
     (nil? node) nil
     (string? node)
     {:kind ::string :mkey ::string :props {:text node}}
     (vector? node)
-    (let [tag (first node)]
+    (let [tag (first node)
+          meta-key (:key (meta node))]
       (cond
-        (keyword? tag) (parse-host tag (vec (rest node)))
+        (keyword? tag) (parse-host tag (vec (rest node)) meta-key)
         (fn? tag)
         (let [content (rest node)
               props-map? (and (map? (first content))
                               (not (record? (first content))))
               base-props (if props-map? (first content) {})
               children (vec (if props-map? (rest content) content))
-              {:keys [key ref]} base-props]
+              key (or (:key base-props) meta-key)
+              ref (:ref base-props)]
           (check-ref! tag ref)
           {:kind ::fncomp :mkey (if-some [k key] {::user-key k ::kind ::fncomp} tag) :key key :ref ref
            :f tag :props (dissoc base-props :key :ref)

@@ -11,6 +11,7 @@
    dispatched from handle-input (editor-set-on-action!), and expanded-text
    support for the external editor flow (editor-get-expanded-text)."
   (:require [clojure.string :as str]
+            [kmet.tui.border :as border]
             [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
@@ -1105,6 +1106,7 @@
 (defcomponent Editor nil [state-atom scroll-offset-atom preferred-col-atom
                           last-width-atom focused? on-submit on-change
                           disable-submit padding-x border-fn height-atom
+                          border-atom
                           undo-stack redo-stack kill-ring last-action
                           paste-buffer paste-state paste-store paste-counter
                           jump-mode
@@ -1141,18 +1143,21 @@
       (reset! scroll-offset-atom scroll-offset)
       (let [visible (subvec visual-lines scroll-offset
                             (min (+ scroll-offset max-visible) (count visual-lines)))
-            bdr (if @border-fn (@border-fn "─") "─")
+            ;; the rule glyph comes from the border set (tui.md §14 R5);
+            ;; :none has no rule glyph, so fall back to the default bar
+            rule (or (border/rule @border-atom) "─")
+            bdr (if @border-fn (@border-fn rule) rule)
             left-pad (apply str (repeat padding-x \space))
             right-pad left-pad
             result (volatile! [])]
         ;; Top border
         (if (pos? scroll-offset)
-          (let [prefix (str "─── ↑ " scroll-offset " more ")
+          (let [prefix (str rule rule rule " ↑ " scroll-offset " more ")
                 prefix-w (u/visible-width prefix)]
             (vswap! result conj
                     (if (>= prefix-w width)
                       (subs prefix 0 width)
-                      (str prefix (apply str (repeat (- width prefix-w) "─"))))))
+                      (str prefix (apply str (repeat (- width prefix-w) rule))))))
           (vswap! result conj (apply str (repeat width bdr))))
         ;; Render visible lines
         (doseq [[vi vl] (map-indexed vector visible)]
@@ -1184,12 +1189,12 @@
         ;; Bottom border
         (let [remaining (- (count visual-lines) (+ scroll-offset (count visible)))]
           (if (pos? remaining)
-            (let [prefix (str "─── ↓ " remaining " more ")
+            (let [prefix (str rule rule rule " ↓ " remaining " more ")
                   prefix-w (u/visible-width prefix)]
               (vswap! result conj
                       (if (>= prefix-w width)
                         (subs prefix 0 width)
-                        (str prefix (apply str (repeat (- width prefix-w) "─"))))))
+                        (str prefix (apply str (repeat (- width prefix-w) rule))))))
             (vswap! result conj (apply str (repeat width bdr)))))
         ;; Autocomplete dropdown below the border (pi: SelectList in render)
         (when (and @(:autocomplete-state this) @(:autocomplete-list this))
@@ -1454,11 +1459,17 @@
      :height  — number of visible lines, fallback when no :terminal-rows (default 12)
      :padding-x — horizontal padding (default 0)
      :border-fn — function to style border chars
+     :border — a kmet.tui.border set for the rule above and below the text
+               (default :normal; :ascii draws it with -, :hidden keeps the
+               rule's cells without ink), resolved here so an unknown style
+               throws at construction. The rule is structural — it carries
+               the scroll indicators and the editor's height — so :none
+               falls back to the default bar rather than removing it
      :keybindings — KeybindingsManager used to match app action handlers
                     (default: the global keybindings manager)
      :terminal-rows — (fn [] int) returning terminal rows for dynamic height
                       (30% of rows, min 5 lines; pi behavior)"
-  [& {:keys [height padding-x border-fn keybindings terminal-rows]
+  [& {:keys [height padding-x border-fn keybindings terminal-rows border]
       :or {height 12 padding-x 0}}]
   (map->Editor {:state-atom (atom (make-editor-state))
                 :scroll-offset-atom (atom 0)
@@ -1470,6 +1481,7 @@
                 :disable-submit (atom false)
                 :padding-x (atom padding-x)
                 :border-fn (atom border-fn)
+                :border-atom (atom (border/resolve border))
                 :height-atom (atom height)
                 :undo-stack (atom [])
                 :redo-stack (atom [])

@@ -85,6 +85,7 @@
     kmet.modes.test-overlay-input-smoke
     kmet.test-editing
     kmet.tui.test-fuzzy
+    kmet.tui.test-border
     kmet.tui.test-autocomplete
     kmet.tui.test-core
     kmet.libs.test-reakt

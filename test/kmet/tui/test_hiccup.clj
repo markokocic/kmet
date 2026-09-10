@@ -401,6 +401,66 @@
       (t/is (nil? (deref ref1)) "removed element cleared its ref")
       (t/is (some? (deref ref0)) "survivor's ref still filled"))))
 
+(t/deftest metadata-key-behaves-as-a-key
+  ;; reagent-style ^{:key k} on the element vector, as an alternative to the
+  ;; :key prop — same reuse contract, same duplicate detection
+  (let [refs {0 (h/ref) 1 (h/ref)}
+        msgs (atom [1])
+        r (h/root (fn [_]
+                    [:container
+                     (map (fn [id]
+                            ^{:key id} [:text {:padding-x 0 :padding-y 0
+                                               :ref (refs id)} (str "m" id)])
+                          @msgs)]))]
+    (core/render r 20)
+    (let [one (deref (refs 1))]
+      (t/is (instance? kmet.tui.components.text.Text one))
+      ;; prepend id 0: the metadata-keyed survivor keeps its instance
+      (swap! msgs (fn [m] (vec (cons 0 m))))
+      (core/render r 20)
+      (t/is (identical? one (deref (refs 1)))
+            "metadata key survives a prepend like a :key prop")
+      (t/is (= ["m0" "m1"] (mapv str/trimr (core/render r 20))))
+      (t/is (some? (deref (refs 0))) "new metadata-keyed sibling mounted")
+      ;; metadata keys participate in duplicate detection
+      (t/is (thrown-with-msg?
+             Exception #"duplicate :key"
+             (h/render-lines
+              [:container
+               ^{:key :a} [:text {:padding-x 0 :padding-y 0} "1"]
+               ^{:key :a} [:text {:padding-x 0 :padding-y 0} "2"]]
+              10))))))
+
+(t/deftest metadata-key-props-win-and-fn-components-take-it-too
+  (t/testing "an explicit :key prop wins over the metadata"
+    ;; both siblings are keyed :a once the metadata loses, so the props key
+    ;; must be the one in effect for the duplicate to be detected
+    (t/is (thrown-with-msg?
+           Exception #"duplicate :key"
+           (h/render-lines
+            [:container
+             ^{:key :meta} [:text {:key :a :padding-x 0 :padding-y 0} "1"]
+             [:text {:key :a :padding-x 0 :padding-y 0} "2"]]
+            10))))
+  (t/testing "fn component invocations are keyed by metadata as well"
+    (let [inits (atom [])
+          kid (fn [{:keys [id]}]
+                (with-let [_ (swap! inits conj id)]
+                  [:text {:padding-x 0 :padding-y 0} (str "k" (name id))]))
+          ids (atom [:b :a])
+          r (h/root (fn [_]
+                      [:container
+                       (map (fn [id] ^{:key id} [kid {:id id}]) @ids)]))]
+      (t/is (= ["kb" "ka"] (mapv str/trimr (core/render r 20))))
+      (t/is (= #{:a :b} (set @inits)) "one instance per key")
+      ;; reverse: the reorder must be visible AND must not remount (each
+      ;; with-let init runs once per instance, so a count of 2 means both
+      ;; instances survived the reorder)
+      (swap! ids (fn [v] (vec (reverse v))))
+      (t/is (= ["ka" "kb"] (mapv str/trimr (core/render r 20)))
+            "the reorder took effect")
+      (t/is (= 2 (count @inits)) "reorder reused the fn instances — no re-init"))))
+
 (t/deftest removed-keyed-children-are-disposed-root-teardown-cascades
   (let [log (atom [])
         ids (atom [1 2])

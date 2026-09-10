@@ -10,6 +10,7 @@
    it like pi's Loader setInterval while output chunks stream through the
    reaction."
   (:require [kmet.libs.reakt :as r]
+            [kmet.tui.border :as border]
             [kmet.tui.hiccup :as hiccup]
             [kmet.tui.macros :as macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
@@ -179,29 +180,29 @@
                root
                ticker-atom
                elapsed-ticker-atom
-               done-atom]
+               done-atom
+               ;; resolved kmet.tui.border set for the chrome (R5), or nil
+               ;; for :none (no frame at all — content lines only)
+               border-atom]
   (render [_this width]
     (let [st @state-atom
           thm (theme/get-current-theme)
           color-key (if (:exclude? st) :dim :bash-mode)
           border-color (fn [s] (theme/fg thm color-key s))
+          b @border-atom
           cw (max 1 (- width 2))
-          top-border (str (border-color "┌")
-                          (apply str (repeat (- width 2) "─"))
-                          (border-color "┐"))
-          bottom-border (str (border-color "└")
-                             (apply str (repeat (- width 2) "─"))
-                             (border-color "┘"))
           content-lines (protocols/render @root cw)
           pad-line (fn [line]
                      (let [vis (u/visible-width line)]
                        (if (>= vis cw)
                          line
                          (str line (apply str (repeat (- cw vis) \space))))))]
-      (conj (into [top-border]
-                  (map #(str (border-color "│") (pad-line %) (border-color "│")))
-                  content-lines)
-            bottom-border)))
+      (if b
+        (conj (into [(border-color (border/top-line b width))]
+                    (map #(border/mid-line b (pad-line %) border-color)
+                         content-lines))
+              (border-color (border/bottom-line b width)))
+        content-lines)))
   (dispose [_this]
     ;; Idempotent: safe to call twice (chat-history-clear! disposes message
     ;; components, and the record may also be disposed directly).
@@ -217,8 +218,14 @@
    Options:
      :command                — the shell command string
      :exclude-from-context?  — boolean (!! vs !)
-     :tools-expanded-atom    — chat-wide expansion toggle atom, or nil"
-  [& {:keys [command exclude-from-context? tools-expanded-atom]
+     :tools-expanded-atom    — chat-wide expansion toggle atom, or nil
+     :border                 — a kmet.tui.border set for the frame
+                               (default :normal; :ascii draws it with -|+,
+                               :hidden keeps the footprint without ink,
+                               :none drops the frame entirely), resolved
+                               here so an unknown style throws at
+                               construction"
+  [& {:keys [command exclude-from-context? tools-expanded-atom border]
       :or {command "" exclude-from-context? false}}]
   (let [state-atom (atom {:command command
                           :output-lines []
@@ -257,7 +264,8 @@
                :root (atom root)
                :ticker-atom (atom nil)
                :elapsed-ticker-atom (atom nil)
-               :done-atom done-atom})]
+               :done-atom done-atom
+               :border-atom (atom (border/resolve border))})]
     ;; Pi Loader parity: drive frames at 80ms while :running. The root's
     ;; reaction stays idle (no body re-runs) — each driven frame just
     ;; re-renders the uncached spinner leaf, so output chunks and the

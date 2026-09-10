@@ -23,6 +23,7 @@ up to date whenever the described behavior changes.
 11. [Debugging rendering](#11-debugging-rendering)
 12. [Testing & performance invariants](#12-testing--performance-invariants)
 13. [Layer boundaries](#13-layer-boundaries)
+14. [Roadmap — borrowed ideas](#14-roadmap--ideas-borrowed-from-glimmer)
 
 ---
 
@@ -67,6 +68,7 @@ atom change → reaction dirty → queued → frame flush runs it →
 | `kmet.tui.keys` / `keybindings` | key names, Kitty protocol decoding, keybinding manager |
 | `kmet.tui.autocomplete` / `fuzzy` | editor autocomplete dropdown, fuzzy matching |
 | `kmet.tui.utils` | text wrapping, visible width, truncation helpers |
+| `kmet.tui.border` | box-drawing glyph sets (frames, rules, table junctions) |
 
 ---
 
@@ -84,8 +86,9 @@ re-render:
  existing-component                        ;; mounted components pass through
                                           ;; (records and reified IComponents)
  ;; seqs get spliced — always key spliced children, or prepending an
- ;; item rebuilds every unkeyed sibling after it:
- (map #(vector :text {:key (:id %) :text (:content %)}) msgs)]
+ ;; item rebuilds every unkeyed sibling after it (either spelling works):
+ (map #(vector :text {:key (:id %) :text (:content %)}) msgs)
+ (map (fn [m] ^{:key (:id m)} [:text (:content m)]) msgs)]
 ```
 
 A tree becomes live only through `hiccup/root` (§2.6) — there is no other
@@ -112,6 +115,18 @@ normalizer rules keep call sites terse:
   sits (the fragment equivalent), for wrappers that must not introduce a
   Box/VStack node into layout.
 
+**Keys** identify a child across passes (§2.3) and can be written either way:
+
+```clojure
+[:text {:key (:id m) :text (:content m)}]      ;; :key prop
+^{:key (:id m)} [:text (:content m)]           ;; element metadata (reagent-style)
+```
+
+The prop wins when both are given. On a fn head the metadata sits on the
+vector the same way (`^{:key id} [row-comp {:item item}]`). Metadata on a
+non-vector child (a record, a string, a stack entry) is ignored — those
+match by identity or kind.
+
 Validation fails loudly: unknown tags throw with a did-you-mean suggestion
 (`:tst` → did-you-mean `:text`), children on a leaf tag throw, duplicate
 `:key`s throw, stack-entry maps outside a stack tag throw, keyword children
@@ -126,9 +141,9 @@ extensions never add host elements. Tags and props:
 | tag | props | children |
 |---|---|---|
 | `:text` | `:text` (primary), `:padding-x` `:padding-y` (default 1), `:bg-fn` | none (leaf) |
-| `:markdown` | `:text` (primary), `:theme`, `:padding-x`, `:default-style`, `:transform` | none (leaf) |
+| `:markdown` | `:text` (primary), `:theme`, `:padding-x`, `:default-style`, `:transform`, `:border` (table glyphs, §2.8) | none (leaf) |
 | `:spacer` | `:lines` (default 1) | none (leaf) |
-| `:dynamic-border` | `:color-fn` (primary; default: theme `:border` color) | none (leaf) |
+| `:dynamic-border` | `:color-fn` (primary; default: theme `:border` color), `:border` (§2.8) | none (leaf) |
 | `:truncated-text` | `:text` (primary), `:padding-x` `:padding-y` (default 0) | none (leaf) |
 | `:spinner` | `:text` (primary), `:active`, `:prefix`, `:frames`, `:interval-ms`, `:spinner-color-fn`, `:message-color-fn` | none (leaf) |
 | `:input` | `:value` (primary), `:on-submit`, `:on-escape` | none (leaf) |
@@ -136,7 +151,7 @@ extensions never add host elements. Tags and props:
 | `:image` | `:base64-data`, `:mime-type` (both required), `:theme`, `:max-width-cells` (default 60), `:max-height-cells`, `:filename`, `:image-id` | none (leaf) |
 | `:select-list` | `:items` (primary), `:height` (default 10), `:theme`, `:header`, `:no-match-text`, `:min-primary-column-width` `:max-primary-column-width`, `:truncate-primary`, `:on-select`, `:on-escape`, `:on-selection-change`, `:on-key` | none (leaf) |
 | `:settings-list` | `:items` (primary), `:theme`, `:on-change`, `:on-escape`, `:enable-search`, `:max-visible` (default 10) | none (leaf) |
-| `:editor` | `:text` (primary), `:height` (default 12), `:padding-x`, `:border-fn`, `:keybindings`, `:terminal-rows`, `:on-submit`, `:on-change` | none (leaf) |
+| `:editor` | `:text` (primary), `:height` (default 12), `:padding-x`, `:border-fn`, `:border` (§2.8), `:keybindings`, `:terminal-rows`, `:on-submit`, `:on-change` | none (leaf) |
 | `:cancellable-loader` | `:spinner` (defaults to a fresh active Spinner), `:on-abort`, `:text` (message for the default spinner) | none (leaf) |
 | `:box` | `:padding-x` `:padding-y` (default 1), `:bg-fn` | yes |
 | `:container` | — | yes |
@@ -154,7 +169,9 @@ state) is kept, but a CHANGED prop rebuilds the component fresh. Live
 updates go through `:ref` plus the component's setters (e.g.
 `(input/input-set-value! (deref r) "x")`), the same contract the
 spliced-record pattern always used. Focus is a host concern — mount the
-component, then `tui-set-focus` on the ref'd instance.
+component, then `tui-set-focus` on the ref'd instance. A *planned* apply
+path (§14 R1) would instead let a prop change patch the live instance,
+making the stateful tags usable declaratively.
 
 **Host-internal components without a tag**: `alt_screen_flash` — it needs
 the TUI's own request-render callback (`kmet.tui.core/tui-flash!` owns its
@@ -175,7 +192,8 @@ reconciler per component, not global**:
 
 Matching: the `:key` prop wins; fallback is match-kind (tag / fn value /
 record payload / string). Reorder by key = reuse (like React), so stateful
-subtrees (editors, `with-let` state, caches) survive reorders. Matched
+subtrees (editors, `with-let` state, caches) survive reorders. Keys may also
+come from element metadata (§2.1). Matched
 children get their props re-applied wholesale — `(reset! (:props c) props)`
 — so **every prop is live**: equal values no-op (memoized children for
 free), changed values re-apply. Unmatched previous children are **disposed**
@@ -309,6 +327,47 @@ reactions unwind through it. Pure-string leaves may be abandoned safely;
 reactive subtrees may not.
 
 ---
+
+### 2.8 Borders — glyph sets as data
+
+Every box-drawing glyph a component draws comes from one place,
+`kmet.tui.border`: a border is a map of eight frame parts (`:top`
+`:bottom` `:left` `:right` and four corners) plus five table junctions
+(`:tee-down` ┬, `:tee-up` ┴, `:tee-left` ┤, `:tee-right` ├, `:cross` ┼).
+
+```clojure
+[:dynamic-border {:color-fn accent-fn :border :rounded}]
+[:markdown {:text t :padding-x 0 :border :ascii}]
+[:editor {:text draft :border {:top "─"}}]          ; a partial map merges over :normal
+```
+
+| style | glyphs |
+|---|---|
+| `:normal` (default) | `─ │ ┌ ┐ └ ┘` + junctions — the pi-parity set |
+| `:rounded` `:thick` `:double` `:block` | the usual box-drawing variants |
+| `:ascii` | `- | +` for a terminal that cannot draw the rest (serial console, `TERM=vt100`) |
+| `:hidden` | spaces — the frame still costs its cells, so a row of frames stays aligned while its ink is gone |
+| `:none` | no border at all: the component draws nothing where the frame would be |
+
+Rules:
+
+- A style is a keyword, a partial map (merged over `:normal`), or `:none`;
+  `nil` means `:normal`. An unknown keyword throws at **construction**
+  with a did-you-mean, so a typo cannot silently draw the wrong frame.
+- The props are resolved when the component is built, not per render.
+- **`:none` removes chrome, never structure.** Where the border is the
+  component's own ink — a `dynamic-border` rule, the bash-execution box —
+  `:none` draws nothing there. Where it is structural — a markdown table's
+  box, the editor's rule (it carries the scroll indicators) — `:none` falls
+  back to the default set; the table would not be a table without its box.
+- Components with a border prop: `:dynamic-border` (a rule),
+  `:markdown` (table glyphs), `:editor` (the rule above and below the
+  text), `kmet.app.ui.bash-execution` (its box, `:border` option). All
+  default to `:normal`, so existing output is unchanged.
+- A component that *draws* a frame uses `border/top-line`,
+  `border/bottom-line`, `border/mid-line` (with an optional edge-styling fn
+  so the sides can take a different colour than the content) and
+  `border/rule-line` rather than inlining glyphs.
 
 ## 3. Reactivity
 
@@ -647,6 +706,10 @@ DSL tags of §2.2):
 | `image` | inline image protocol rendering (kitty/iTerm style) |
 | `alt_screen_flash` | alternate-screen takeover + restore |
 
+Frame glyphs come from `kmet.tui.border` (§2.8), not from the components:
+`dynamic_border` and `editor` draw a rule, `markdown` its table, and the
+app-layer `bash_execution` its box — each with a `:border` style.
+
 Message-like app components (chat history, tool executions) live in
 `kmet.app.ui.*`, not here — this layer stays generic.
 
@@ -756,3 +819,195 @@ kmet.libs.*     self-contained (terminal protocol lives here too)
 
 `kmet.tui.*` must never require `kmet.app.*`, `kmet.modes.*` or
 `kmet.ai.*`; app-specific components belong in `kmet.app.ui.*`.
+
+---
+
+## 14. Roadmap — ideas borrowed from glimmer
+
+Sections 1–13 describe current behavior. **The items below are not
+implemented** — this is a plan record, kept so the analysis behind the
+decisions is not lost. When an item lands, fold its behavior into the
+relevant section, add it to the Done table and strike it from the plan.
+
+Origin: [glimmer](https://github.com/jolt-lang/glimmer) — a reactive core +
+reagent-style component model targeting Jolt — and
+[glimmer-tui](https://github.com/jolt-lang/glimmer-tui), its ncursesw
+terminal backend. Both MIT; neither is a dependency. Glimmer's layer is not
+adoptable wholesale: it has no width, no input/focus, no disposal and no
+render cache, and a parent re-render re-invokes every child body — whereas
+kmet's narrower layer already runs on both bb and Jolt. So this is an
+idea-level borrow only.
+
+### Done
+
+| # | idea | landed as |
+|---|---|---|
+| R5 | border sets as data | `kmet.tui.border` (§2.8) — `:border` on `:dynamic-border`, `:markdown` (table glyphs), `:editor`; `make-bash-execution :border` |
+| R6 | `^{:key}` metadata | keys read from element metadata as well as the `:key` prop (§2.1) |
+
+### Plan
+
+| # | borrow | kmet pain point | lands in | size |
+|---|---|---|---|---|
+| R1 | prop→state apply path | stateful-leaf props are create-time → a changed prop rebuilds and drops state | `hiccup.clj` tag table + `reuse-or-build` | medium |
+| R2 | writable cursor | `reakt/cursor` is read-only; two-way binding needs an atom + setter callback | `kmet.libs.reakt` | small |
+| R3 | key labels + focus-derived help | hints are hand-written; chords display as resolved keys | `keybindings.clj` + a help-line component | small |
+| R4 | loop-owned timer registry | ad-hoc intervals, each re-inventing its zombie defense | `tui.core` (loop) | small |
+| R7 | declarative `:overlay` | dialogs are shown imperatively; declaration site ≠ owner | `hiccup.clj` + `tui.core` | large (spike) |
+
+### R1 — prop→state apply path
+
+**Pain.** Stateful leaves (§2.2) are construct-or-rebuild: `reuse-or-build`
+keeps a matched non-container leaf only while its props stay `=`; a changed
+prop retires the instance and constructs a fresh one — which is where the
+input's `value-atom`/cursor, the editor's undo stack and the list's
+selection are lost. That is why production code never uses the stateful
+tags: dialogs and screens build `make-select-list` / `make-editor` / … and
+drive them through `:ref` + setters, and no tree in `src/` contains an
+`[:input …]` / `[:editor …]` / `[:select-list …]` element (the tags are
+exercised by tests only). The hiccup docstring already names the target:
+container structural props (`:padding-x`, `:gap`) are create-time too,
+pending a props/state migration.
+
+**Borrow.** glimmer-tui's `widget/apply-props!` plus per-tag
+`:init-state`/`:sync-state`: on re-render a prop only overwrites widget
+state when it differs from what the widget already holds. Their rationale
+is exactly kmet's failure mode — without the differing check, the
+`:on-change` → `swap!` → re-render cycle writes the edit buffer back over
+itself and parks the caret at the end on every keystroke.
+
+**Proposal.** An optional `:apply` fn in the tag spec
+(`(fn [comp props] …)`, name open) that `reuse-or-build` calls on a matched
+leaf whose props changed — patch and keep the instance instead of
+retire + construct. The components' existing setters are already
+equality-gated, so no new protocol is needed; the tag table declares which
+tags are patchable and how. The same path is the vehicle for the
+props/state migration (making container structural props live).
+
+**Watch out.** `reuse-or-build`'s rebuild branch is order-sensitive
+(retire first, so the old stamp's ref handle cannot wipe the fresh
+construction's) — the apply branch must fill/remember refs symmetrically
+with both existing branches. Tests pin rebuild-on-prop-change for display
+leaves; those stay valid (display leaves remain identity-free rebuilds),
+but expectations for the stateful tags change.
+
+### R2 — writable cursor
+
+**Pain.** `reakt/cursor` is a derived, read-only reaction (`get-in` over a
+tracked source); a two-way binding today means carrying an atom *plus* a
+setter callback through props.
+
+**Borrow.** `glimmer.ratom/cursor` is a lens: reads are
+`(get-in @src path)`; `reset!`/`swap!` write back through `assoc-in` and
+fire the cursor's own watchers.
+
+**Proposal.** A writable cursor variant (or a `:write-back` option on
+`make-reaction`) whose setter `swap!`s the source with `assoc-in`, reusing
+the tracked-deref/`watch-ref` plumbing so normal queued invalidation flows.
+Keep the read-only cursor for pure derivation — a subscriber that only
+reads must not be able to write.
+
+**Pairs with R1:** `[:settings-row {:value (reakt/cursor cfg [:http-transport])}]`
+is the natural call site, but either is independently useful.
+
+### R3 — key labels + a focus-derived help line
+
+**Pain.** `keybindings.clj` already owns ids, defaults, `:description`s,
+user overrides and conflict detection, and `key-text`/`key-hint` render a
+binding into a hint string — but chords display as resolved keys (`pageUp`,
+`alt+b`), and hints are hand-written per dialog, so they drift. Nothing
+shows what the focused component answers to.
+
+**Borrow.** glimmer-tui's `keys/describe` (label table + modifier
+formatting: `:page-up` → `pgup`, arrows) and its `help` widget: widgets
+declare `:bindings`; the help bar renders whatever is focused, including
+bindings inherited from ancestor containers (a key a widget declines is
+offered to its ancestors, so PageDown reaches the scroll view a focused
+button sits in).
+
+**Proposal.** Stage it. (a) A `describe`-style label fn over kmet's key
+strings, reusing the manager's descriptions — self-contained. (b) An
+optional per-component binding declaration (or a session context map, the
+way `theme-sub` and the focus home already flow) plus a one-line help
+component. (b)'s whole work item is the decision where declarations live.
+
+### R4 — a loop-owned timer registry
+
+**Pain.** Time-driven work is ad-hoc and each site re-invents its zombie
+defense: `tool_execution` races `future-cancel` against `swap-vals!`; the
+scroll-view owns a hide timer; the spinner recomputes its frame from
+wall-clock, and gets its invalidation from whichever component mounts it.
+"Timers/intervals belong in `dispose`" (§5.1) is a rule every new
+component must remember.
+
+**Borrow.** glimmer-tui's `after!`/`every!`/`cancel!`/`cancel-all!`: a
+due-time registry, fired on the loop thread, cancelled wholesale when the
+loop exits.
+
+**Proposal.** A small registry keyed by id holding `{:due :every :f}`,
+fired by the frame loop at its tick, with `cancel-all!` in `tui-stop` (and
+therefore at session teardown). Components that need the old control can
+keep their own, but the norm stops being per-component knowledge.
+
+### R7 — declarative `:overlay` (spike)
+
+**Pain.** The overlay stack is imperative: dialogs/screens are built and
+shown through `tui-show-overlay` with options, so a component that owns
+dialog state must also know about the stack — the declaration site is not
+the owner.
+
+**Borrow.** In glimmer-tui an overlay is a tree element: it takes no space
+at its declaration site, is painted last (never clipped by the box it was
+declared in), traps focus while modal, and closes on Esc.
+
+**Proposal.** An `[:overlay {…} child]` tag that registers with the host
+overlay stack on first reconcile and unregisters on dispose — the tree
+declares, the session keeps owning z-order, sizing and focus (kmet's
+placement is computed from terminal size by the session; that stays). Not
+portable verbatim: kmet's in-tree layout is line concatenation, with no
+screen coordinates to anchor to. Needs a tree → session hook (a dynamic var
+around a mount, or a per-session registry) — that hook is the spike.
+
+### Deliberately not borrowing
+
+Recorded so the analysis is not redone:
+
+- **Two-pass box layout** (`measure`/`arrange`, per-node `:natural`/`:min`,
+  `:hexpand`/`:halign`, margin/padding shorthand, proportional
+  `shrink-to-fit`, serve-in-order-then-clip) — kmet renders *lines*:
+  components return line seqs, stacks concatenate, and the interactive
+  layout scrolls the terminal's own scrollback. A box model needs an owned
+  screen; keep it as a reference. The transferable insight, should a flex
+  layer ever appear: let a node declare what it can survive on, squeeze
+  proportionally, clip last.
+- **Cell-grid screen + `clip` wrappers** (`:size`/`:clear!`/`:put!`/
+  `:cursor!`/`:present!` as a map; clipping as a screen wrapper; a
+  placeholder cell after a double-width glyph; painting the node's own rect
+  so a partly-scrolled row lands on the right line) — kmet's model is ANSI
+  strings + a differential line writer + `slice-with-width`, with the
+  over-wide-line guard at the frame boundary (§11). Two details worth
+  remembering: clipping should be a no-op, never an exception; and
+  `drop-cells` pads the gap a straddling wide glyph leaves at a *left-edge*
+  cut (kmet's `:strict?` drops the glyph instead — right for editor
+  windowing, wrong for column-aligned output).
+- **`IReactiveCell`** (swappable cell backend) — `tracked-deref` +
+  `watch-ref` is already kmet's seam, and Babashka seals
+  `IWatchable`/`IReset`, so a drop-in atom cannot exist anyway (§3.1).
+- **Focus ring recomputed from the tree + `:autofocus`** — kmet focus is
+  imperative and dialog-scoped (§7). The one idea to revisit is
+  `:autofocus`: it exists so a focused text field does not swallow the
+  app's single-key bindings before the user presses Tab.
+- **Mouse hit-testing / wheel-under-pointer** — kmet parses mouse
+  sequences only to keep the input buffer clean (§7) and has no owned
+  viewport to hit-test. A feature (alt-screen region), not a transplant.
+- **`reload!` / `run-async` / `usable-terminal?`** — kmet's dev loop is
+  nREPL + `tui-invalidate`, and it owns its terminal adapter (JLine, stty
+  snapshots).
+
+### Suggested order
+
+R4 and R3a (self-contained) → R1 + R2 together: R2 gives R1 its natural
+call site, and R1 is the props/state migration → R7 as a spike, once the
+tag-table extension path has been used once (R5 and R6 have exercised it).
+R3b waits on the declarations decision.
+
