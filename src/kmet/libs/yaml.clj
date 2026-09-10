@@ -17,7 +17,8 @@
    aliases, tags, multi-document streams, multi-line plain scalars without
    a block indicator. Unknown double-quote escapes are kept literally;
    duplicate keys resolve to the last value (pi's yaml throws)."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [kmet.libs.num :as num]))
 
 ;; ─── Line preprocessing ────────────────────────────────────────────────────
 
@@ -113,15 +114,15 @@
 (defn- parse-plain
   "Resolve a plain (unquoted) scalar per pi's yaml package (YAML 1.2 core
    subset): strings, booleans incl. case variants, null, ints, floats.
-   Overflowing ints fall back to the string (pi yields a JS float; bb's
-   parse-long returns nil instead of throwing)."
+   Overflowing ints fall back to the string (num/parse-long is nil on
+   overflow on both hosts; jolt's core parse-long would yield a BigInt)."
   [s]
   (let [s (str/trim s)]
     (cond
       (contains? null-words s) nil
       (contains? true-words s) true
       (contains? false-words s) false
-      (re-matches #"[-+]?\d+" s) (or (try (parse-long s) (catch Exception _ nil)) s)
+      (re-matches #"[-+]?\d+" s) (or (num/parse-long s) s)
       (re-matches #"[-+]?(\d+\.\d+[eE][-+]?\d+|\d+\.\d+|\d+[eE][-+]?\d+|\.\d+)" s)
       (or (try (Double/parseDouble s) (catch Exception _ nil)) s)
       :else s)))
