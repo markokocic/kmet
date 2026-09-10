@@ -5,9 +5,13 @@
    off-peak rate, converted to the machine's local time zone, plus whether
    it is currently peak or off-peak and how long until the next switch.
    Hours per DeepSeek's official pricing page (api-docs.deepseek.com):
-   peak is 01:00–04:00 and 06:00–10:00 UTC on weekdays (Monday through
-   Friday, Beijing time), everything else is off-peak at half the peak
-   rate — since 2026-08-23 the whole weekend is off-peak.
+   \"Peak hours (in UTC): 1:00–4:00 AM and 6:00–10:00 AM, Monday to Friday.
+   All other hours are off-peak.\" Off-peak is half the peak rate, so the
+   whole UTC weekend is off-peak.
+
+   The weekday qualifier is a UTC boundary, not a local one: west of UTC
+   the week's first peak block (01:00 UTC Monday) lands on Sunday evening
+   local time.
 
    The window table lives in `peak-windows-utc`; update it there if
    DeepSeek ever changes its schedule.
@@ -15,9 +19,12 @@
    Display follows /session: the panel is appended to the chat history as
    an :info message via kmet.extension/ui-chat-info — part of the live
    transcript, no overlay and nothing to dismiss, never sent to the LLM,
-   not persisted across restarts. Headless/print mode falls back to a
-   one-line flash — as does a host whose running instance predates the
-   bridge (/reload refreshes extension files, not host code).
+   not persisted across restarts. It is laid out as narrow lines (see
+   `max-line-len`): the chat word-wraps content without a hanging indent,
+   so a wide line on a narrow terminal comes back as scattered words.
+   Headless/print mode falls back to a one-line flash — as does a host
+   whose running instance predates the bridge (/reload refreshes extension
+   files, not host code).
 
    The local time zone is detected explicitly: on Termux/Android the JVM
    falls back to GMT (no /etc/localtime) while Android keeps the real zone
@@ -35,24 +42,20 @@
 ;; ─── The schedule (api-docs.deepseek.com/quick_start/pricing) ──────────────
 
 (def ^:private peak-windows-utc
-  "Weekday peak windows as {:start [hour minute] :end [hour minute]} pairs in
-   UTC — peak applies Monday through Friday (in Beijing time; see
-   weekend-off-peak?). Everything outside these windows is off-peak (half the
-   peak rate)."
+  "Peak windows as {:start [hour minute] :end [hour minute]} pairs in UTC —
+   they apply only on UTC weekdays (see utc-weekend?). Everything outside
+   these windows is off-peak (half the peak rate)."
   [{:start [1 0], :end [4 0]}
    {:start [6 0], :end [10 0]}])
 
-(defn- weekend-off-peak?
-  "True when NOW falls on a Saturday or Sunday in Beijing time — off-peak
-   applies throughout the day (rule since 2026-08-23).
+(defn- utc-weekend?
+  "True when UTC calendar day DATE is a Saturday or Sunday — no peak windows
+   exist then: the whole UTC weekend is off-peak.
 
-   The weekend is read off the +08:00 clock, not UTC: Beijing's weekend runs
-   16:00 Friday UTC → 16:00 Sunday UTC. Reading the day-of-week off the
-   unshifted instant would bill Friday 16:00–24:00 UTC (Beijing Saturday)
-   and Sunday 00:00–16:00 UTC (Beijing Sunday) at peak."
-  [now]
-  (let [beijing (.withZoneSameInstant now (java.time.ZoneId/of "Asia/Shanghai"))
-        dow (.getDayOfWeek beijing)]
+   The weekday qualifier is a UTC boundary, not a local one: Sunday 18:00
+   US Pacific is already Monday 01:00 UTC and bills at peak."
+  [date]
+  (let [dow (.getDayOfWeek date)]
     (or (= dow java.time.DayOfWeek/SATURDAY)
         (= dow java.time.DayOfWeek/SUNDAY))))
 
@@ -108,52 +111,53 @@
   (java.time.ZonedDateTime/now @local-zone))
 
 (defn- windows-on-utc-date
-  "Every peak window whose START falls on NOW's UTC date shifted by
-   DAY-OFFSET days."
-  [now day-offset]
-  (let [date (-> now (.withZoneSameInstant utc) (.toLocalDate) (.plusDays day-offset))]
+  "The peak windows dated UTC calendar day DATE, or nil when DATE is a UTC
+   weekend (off-peak all day, so no windows)."
+  [date]
+  (when-not (utc-weekend? date)
     (for [{[sh sm] :start, [eh em] :end} peak-windows-utc]
       {:start (java.time.ZonedDateTime/of (.atTime date sh sm) utc)
        :end (java.time.ZonedDateTime/of (.atTime date eh em) utc)})))
 
 (defn- windows-around
-  "Windows starting from two days before to one day after NOW's UTC date —
-   enough to cover both the current window and the next one regardless of
-   the local offset."
+  "Peak windows from NOW's UTC date through the next four days. The window
+   containing NOW is always dated NOW's UTC date (windows never cross
+   midnight UTC), and four days always reach the next peak day across a UTC
+   weekend (Friday's last window ends 10:00 UTC, the next starts Monday
+   01:00)."
   [now]
-  (mapcat #(windows-on-utc-date now %) [-2 -1 0 1]))
+  (let [date (.toLocalDate (.withZoneSameInstant now utc))]
+    (mapcat #(windows-on-utc-date (.plusDays date %)) (range 0 5))))
+
+(defn- next-peak-date
+  "The upcoming UTC weekday: NOW's UTC date when it is a weekday, otherwise
+   the following Monday. Picks the day the panel renders its window lines
+   for, so a UTC weekend still shows the upcoming peak windows."
+  [now]
+  (let [date (.toLocalDate (.withZoneSameInstant now utc))]
+    (first (remove utc-weekend? (map #(.plusDays date %) (range 0 4))))))
 
 (defn- peak-status
   "Where NOW sits relative to the schedule:
      {:phase :peak | :off-peak, :next-change ZonedDateTime}
-   :next-change is the instant the current phase ends. Peak windows apply
-   only Monday through Friday in Beijing time; the whole weekend (Beijing
-   time) is off-peak. The next change is the earliest transition after NOW:
-   the end of the current window when inside one, otherwise the next window
-   start — a weekend is one contiguous off-peak block, so no transition
-   occurs at Saturday/Sunday 00:00 Beijing."
+   Peak windows run 01:00–04:00 and 06:00–10:00 UTC on UTC weekdays; the
+   whole UTC weekend is off-peak. :next-change is the instant the current
+   phase ends: the end of the window containing NOW when peak, otherwise
+   the start of the next peak window — a UTC weekend is one contiguous
+   off-peak block, so no transition occurs inside it."
   [now]
-  (let [in-window? (fn [zdt]
-                     (and (not (weekend-off-peak? zdt))
-                          (some (fn [w]
-                                  (and (not (.isBefore zdt (:start w)))
-                                       (.isBefore zdt (:end w))))
-                                (windows-around zdt))))
-        ;; every candidate phase boundary after NOW, built in UTC (the window
-        ;; hours are UTC); a boundary is only real when its own Beijing day is
-        ;; a weekday — Saturday/Sunday add no transitions (whole weekend is
-        ;; one off-peak block)
-        candidates (for [d (range -2 5)
-                         :let [date (.plusDays (.toLocalDate (.withZoneSameInstant now utc)) d)]
-                         [h m] (concat (map :start peak-windows-utc)
-                                       (map :end peak-windows-utc))
-                         :let [zdt (java.time.ZonedDateTime/of (.atTime date h m) utc)]
-                         :when (not (weekend-off-peak? zdt))
-                         :when (.isAfter zdt now)]
-                     zdt)
-        next-change (apply min-key #(.toEpochSecond %) candidates)
-        phase (if (in-window? now) :peak :off-peak)]
-    {:phase phase :next-change next-change}))
+  (let [wins (windows-around now)
+        current (some (fn [{:keys [start end] :as w}]
+                        (when (and (not (.isBefore now start))
+                                   (.isBefore now end))
+                          w))
+                      wins)]
+    {:phase (if current :peak :off-peak)
+     :next-change (or (:end current)
+                      (->> wins
+                           (map :start)
+                           (filter #(.isBefore now %))
+                           (apply min-key #(.toEpochSecond %))))}))
 
 (defn- format-duration
   "DURATION as a compact human string: \"<1m\", \"42m\", \"1h\", \"1h 37m\"."
@@ -186,44 +190,64 @@
 
 ;; ─── The panel (/session-style chat info message) ─────────────────────────
 
-(defn- fmt-window-line
-  "One window as \"HH:mm–HH:mm\" in ZONE (local view) with its UTC span on
-   the following line: e.g. \"04:00–07:00 Europe/Athens\n  (01:00–04:00 UTC)\"."
-  [w zone]
-  (let [local (format "%s–%s" (fmt-local (:start w) zone) (fmt-local (:end w) zone))
-        utc-span (format "%s–%s" (fmt-local (:start w) utc) (fmt-local (:end w) utc))]
-    (str local " " zone "\n"
-         "  (" utc-span " UTC)")))
+(def ^:private max-line-len
+  "Hard cap on a panel line, in characters — every panel character is
+   single-column (ASCII plus the en dash and ● markers), so `count` is the
+   rendered width. The chat paints the content through its Markdown view,
+   which word-wraps at
+   the message width WITHOUT a hanging indent: a wrapped tail drops back to
+   column 0, out of its block, and the panel reads as noise. So the layout
+   is short, self-contained lines; at 22 a 24-column message width (22 +
+   the 1-column box padding on each side, i.e. a 26-column terminal) still
+   shows every line unwrapped."
+  22)
+
+(defn- zone-label
+  "The zone name for the local block header, kept short enough that
+   \"Local (…)\" fits max-line-len: the full zone id when it fits, its last
+   path segment otherwise (America/Los_Angeles → Los Angeles) — a longer id
+   would wrap away from the header it labels."
+  [zone]
+  (let [id (str zone)
+        budget (- max-line-len (count "Local ()"))]
+    (if (<= (count id) budget)
+      id
+      (-> id (str/split #"/") last (str/replace "_" " ")))))
+
+(defn- span-line
+  "One window on one line — \"  04:00–07:00\" — for the block under a header
+   carrying its zone. WITH-DOW? adds the weekday of the window's start: the
+   local view needs it, since west of UTC a UTC-Monday window starts on
+   Sunday local time, a day the UTC rule does not imply."
+  [w zone with-dow?]
+  (str "  " (fmt-local (:start w) zone with-dow?) "–" (fmt-local (:end w) zone)))
 
 (defn- peak-panel-text
   "The panel as styled plain text for the chat :info message (dim labels,
-   bracketed [DeepSeek Peak Hours] label above — the /session look).
-   Rendered through the chat's markdown view, which passes ANSI through
-   with ANSI-aware wrapping, so no theme instance is needed: only the
-   global theme/dim. Every line is kept short (~33 chars max) so the
-   panel never wraps inside the message box, even on narrow terminals."
+   plain times and phase line — the /session look: a bracketed
+   [DeepSeek Peak Hours] label above, ANSI passed through by the markdown
+   view, so no theme instance is needed: only the global theme/dim and the
+   message's own text color). UTC windows first (the published rule), then
+   the same windows on the detected local clock, then the current phase and
+   the switch countdown. Every line stays inside max-line-len."
   []
   (let [now (now-local)
         zone (.getZone now)
         {:keys [phase next-change]} (peak-status now)
         remaining (format-duration (java.time.Duration/between now next-change))
         peak? (= :peak phase)
-        window-rows (windows-on-utc-date now 0)]
-    (str (theme/dim "Peak (full rate):") " Mon–Fri Beijing\n"
-         (str/join "\n" (map #(fmt-window-line % zone) window-rows))
-         "\n\n"
-         (theme/dim "Off-peak: half rate") "\n"
-         "  " (theme/dim "all other hours") "\n"
-         "  " (theme/dim "all day Sat/Sun") "\n\n"
-         (if peak?
-           (str (theme/dim "● PEAK — full rate now")
-                "\n  " (theme/dim (format "off-peak at %s (in %s)"
-                                          (fmt-local next-change zone true)
-                                          remaining)))
-           (str (theme/dim "● OFF-PEAK — half rate now")
-                "\n  " (theme/dim (format "peak at %s (in %s)"
-                                          (fmt-local next-change zone true)
-                                          remaining)))))))
+        wins (windows-on-utc-date (next-peak-date now))]
+    (str (theme/dim "Peak — full rate") "\n"
+         (theme/dim "  Mon–Fri UTC") "\n"
+         (str/join "\n" (map #(span-line % utc false) wins)) "\n\n"
+         (theme/dim (str "Local (" (zone-label zone) ")")) "\n"
+         (str/join "\n" (map #(span-line % zone true) wins)) "\n\n"
+         (theme/dim "Off-peak — half rate") "\n"
+         (theme/dim "  all other hours,") "\n"
+         (theme/dim "  incl. Sat/Sun UTC") "\n\n"
+         (if peak? "● PEAK now" "● OFF-PEAK now") "\n"
+         (theme/dim (format "  ends %s" (fmt-local next-change zone true))) "\n"
+         (theme/dim (format "  (in %s)" remaining)))))
 
 (defn- show-peak-info!
   "Append the panel as an :info chat message (the /session display style —
