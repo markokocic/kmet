@@ -18,6 +18,7 @@
             [kmet.app.ui.assistant-message :as am]
             [kmet.app.ui.tool-execution :as te]
             [kmet.app.ui.custom-message :as cm]
+            [kmet.app.ui.image-block :as image-block]
             [kmet.app.ui.skill-message :as skill-message]
             [kmet.app.skills :as skills]
             [kmet.app.tools.core :as tools]
@@ -119,6 +120,18 @@
                   :else
                   (or (:content b) (:text b) ""))))))
 
+(defn- content->user-text
+  "Display text of a user message's content: text blocks only — image
+   blocks render as their own image elements (image-block), not as inline
+   placeholders (pi: getUserMessageText)."
+  [content]
+  (cond
+    (string? content) content
+    (nil? content) ""
+    :else (str/join "\n" (for [b content
+                               :when (not (contains? #{:image "image"} (:type b)))]
+                           (or (:content b) (:text b) "")))))
+
 (defn- make-plain-msg
   "Create a Spacer(1) + plain Text pair — pi's showError/showWarning: a
    dim/error/warning line with no background box."
@@ -181,9 +194,10 @@
    instead of dumping the XML wrapper and the whole skill body into the
    transcript — the trailing args (if any) stay a normal user message below
    it, exactly as pi splits the two (pi: parseSkillBlock +
-   SkillInvocationMessageComponent)."
+   SkillInvocationMessageComponent). Attached image blocks render inline."
   [msg output-pad tools-expanded-atom]
-  (let [text (content->display-text (:content msg ""))]
+  (let [text (content->user-text (:content msg ""))
+        images (image-block/content-images (:content msg))]
     (if-let [block (skills/parse-skill-block text)]
       (skill-message/make-skill-invocation-message
        :skill-block block
@@ -191,7 +205,7 @@
        :output-pad output-pad
        :user-message (when-let [args (:user-message block)]
                        (um/make-user-message :text args :output-pad output-pad)))
-      (um/make-user-message :text text :output-pad output-pad))))
+      (um/make-user-message :text text :images images :output-pad output-pad))))
 
 (defn- make-component-for-msg
   "Create the appropriate component for a message map.
@@ -250,6 +264,7 @@
         :bash (:component msg)  ;; Already-constructed BashExecutionComponent
         :info (cm/make-custom-message :label (:label msg)
                                       :content (:content msg "")
+                                      :images (:images msg)
                                       :output-pad output-pad)
       ;; one-shot styled entries take the palette snapshot at creation —
       ;; they are plain Text, there is nothing to re-theme

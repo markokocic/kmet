@@ -4,6 +4,7 @@
    Falls back to text representation when image protocol is unavailable."
   (:require [kmet.tui.protocols :as protocols]
             [kmet.libs.terminal-image :as img]
+            [kmet.tui.utils :as utils]
             [kmet.tui.macros :refer [track! defcomponent]]))
 
 (defn- current-image-id
@@ -12,6 +13,17 @@
    track! cache and re-render every frame."
   [comp]
   @(:image-id-atom comp))
+
+(defn- fallback-line
+  "The text indicator drawn instead of the image (no protocol, or the
+   render failed) — pi: imageFallback + fallbackColor + truncateToWidth."
+  [comp width]
+  (let [style (or (:fallback-color @(:theme-atom comp)) identity)]
+    (utils/truncate-to-width
+     (style (img/image-fallback (:mime-type comp)
+                                :dimensions (:dimensions comp)
+                                :filename (:filename (:options comp))))
+     width)))
 
 (defcomponent ImageComponent nil [base64-data mime-type dimensions
                                   theme-atom options image-id-atom
@@ -44,13 +56,9 @@
                           (into [(:sequence result)]
                                 (repeat (dec rows) "")))
                         ;; Render failed — fallback
-                        [(img/image-fallback mime-type
-                                             :dimensions dimensions
-                                             :filename (:filename options))]))
+                        [(fallback-line this width)]))
                     ;; No image protocol — text fallback
-                    [(img/image-fallback mime-type
-                                         :dimensions dimensions
-                                         :filename (:filename options))])]
+                    [(fallback-line this width)])]
         lines))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────

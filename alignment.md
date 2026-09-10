@@ -144,7 +144,7 @@ list/config` dispatch from `core.clj` to `kmet.package-manager` (pi
 | **Mermaid diagram rendering** | `modes/interactive/components/mermaid.ts` + `markdown.mermaid` setting (`off`/`final`/`streaming`) | **Postponed indefinitely** (2026-09-10; rationale in `src/kmet/tui/tui.md` §14) |
 | **LaTeX rendering** (`$…$`, `$$…$$`) | `packages/tui/src/latex.ts`, wired in `tui/src/components/markdown.ts` | **Postponed indefinitely** (same) |
 | **Alt-screen search** (search overlay over the transcript) | `packages/tui/src/alt-screen-search.ts`, `tui-alt-screen.ts` | **Postponed indefinitely** (same — needs an alt-screen mode) |
-| **Images in chat** | `terminal.showImages`, `terminal.imageWidthCells`, `images.autoResize`, `images.blockImages` settings; `show-images-selector.ts` | **Planned** — `src/kmet/tui/tui.md` §14 P2. Partial today: tool-execution images only, `:show-images` hardcoded; no settings, no inline/custom-message images. The wire half (`autoResize`, `blockImages`) rides the provider work |
+| **Images in chat** | `terminal.showImages`, `terminal.imageWidthCells`, `images.autoResize`, `images.blockImages` settings; `show-images-selector.ts` | **Partial** — TUI half **done** (`tui.md` §14 P2): `:terminal {:show-images :image-width-cells}` settings, terminal-support-gated `/settings` rows, and inline images (or the `imageFallback` text indicator when off/unsupported) in tool results and user/custom messages. The wire half (`images.autoResize`, `images.blockImages`) rides the provider work |
 | **Cache-miss notices** | `showCacheMissNotices` setting | Done — `:show-cache-miss-notices` setting, `session/detect-cache-miss` (pi detectMiss), notice at agent-end (≥ 20k tokens) |
 | **Skill invocation presentation** | `components/skill-invocation-message.ts` | **Done** — `kmet.app.skills/parse-skill-block` + `kmet.app.ui.skill-message`: a `/skill:name` block renders as `[skill] name (ctrl+o to expand)` (collapsed) or the name + body as Markdown (expanded), with the trailing args as a normal user message below. Live and replay share the parse; the session still stores the expanded text |
 | **Custom entry rendering** | `registerEntryRenderer` + `components/custom-entry.ts` | Done — `extensions/register-entry-renderer!` + live entry sink; rendered at replay and on append (pi registerEntryRenderer + CustomEntryComponent) |
@@ -160,7 +160,8 @@ reload, quit, help, tools, theme — full parity with pi's built-in command set.
 kmet (`config.clj`) covers: provider/model/thinking/theme/session-dir/
 http-idle-timeout-ms/system-prompt/append-system-prompt/retry
 (enabled/max-retries/base-delay-ms)/enabled-models/hide-thinking-block/
-extensions/skills/prompts/themes dirs, compaction thresholds, `.kmet/SYSTEM.md` +
+extensions/skills/prompts/themes dirs, compaction thresholds, terminal image
+display (`:terminal` — show-images/image-width-cells), `.kmet/SYSTEM.md` +
 `APPEND_SYSTEM.md` discovery, `KMET_PROVIDER`/`KMET_MODEL` env vars.
 
 Missing (pi `docs/settings.md`):
@@ -180,8 +181,8 @@ Missing (pi `docs/settings.md`):
 | `retry.provider.timeoutMs` / `maxRetries` / `maxRetryDelayMs` | provider/SDK retry tuning |
 | `steeringMode`, `followUpMode` | queue drain mode (kmet hardcodes `:all` in `app/loop.clj`; pi defaults `one-at-a-time`) |
 | `transport`, `websocketConnectTimeoutMs` | provider transport selection |
-| `terminal.showImages`, `terminal.imageWidthCells`, `terminal.clearOnShrink` | terminal image display |
-| `images.autoResize`, `images.blockImages` | image handling |
+| `terminal.clearOnShrink` | terminal display (the `terminal.showImages` / `terminal.imageWidthCells` rows are done — see §2) |
+| `images.autoResize`, `images.blockImages` | image handling (wire half — rides the provider work) |
 | `shellPath`, `shellCommandPrefix` | shell customization |
 | `markdown.codeBlockIndent`, `markdown.mermaid` | markdown rendering |
 | `enableSkillCommands` | register skills as `/skill:name` commands |
@@ -223,9 +224,10 @@ Full extension API surface (pi `core/extensions/types.ts`) — one remaining gap
   `app.tree.filter.*` ids + `app.tree.editLabel` are now registered keybindings the
   tree selector resolves through the keybindings manager (rebindable)
 - **`/settings` menu breadth** — kmet `/settings` covers thinking/hide-thinking/retry only;
-  **done (theme)**: a theme row (name switch + persist) was added; the images row lands with
-  `tui.md` §14 P2. The mermaid and tui-mode rows are postponed indefinitely with their
-  features (`tui.md` §14)
+  **done (theme)**: a theme row (name switch + persist) was added; **done (images)**: the
+  Show images / Image width rows (pi: show-images-selector, gated on terminal image
+  support) landed with `tui.md` §14 P2. The mermaid and tui-mode rows are postponed
+  indefinitely with their features (`tui.md` §14)
 - **Auth selector/dialog components** — pi `login-dialog.ts`, `oauth-selector.ts`,
   `session-selector-search.ts`; kmet's terminal `/login` covers the flows
 - **`packages/agent` (`@earendil-works/pi-agent-core`)** — general-purpose agent library

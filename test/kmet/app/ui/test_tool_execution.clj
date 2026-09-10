@@ -6,6 +6,7 @@
             [kmet.libs.terminal-image :as timg]
             [kmet.tui.theme :as theme]
             [kmet.tui.timers :as timers]
+            [kmet.app.ui.subs :as subs]
             [kmet.app.ui.tool-execution :as te]
             [kmet.app.ui.tool-renderers :as renderers]))
 
@@ -535,3 +536,105 @@
     (let [plain (render-tool :name "custom" :content "")]
       (is (some #(re-find #"custom" %) plain))
       (is (not-any? #(re-find #"more lines" %) plain)))))
+
+;; ─── Images (P2: show-images setting + terminal capability) ────────────────
+
+(def ^:private png
+  "A 1x1 PNG."
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+
+(defn- with-image-env
+  "Run F with the shared image settings and terminal capabilities bound
+   (both are process-global); restore afterwards."
+  [settings caps f]
+  (let [prev-settings @subs/image-settings-atom
+        prev-caps (timg/get-capabilities)]
+    (try
+      (reset! subs/image-settings-atom settings)
+      (timg/set-capabilities! caps)
+      (f)
+      (finally
+        (reset! subs/image-settings-atom prev-settings)
+        (timg/set-capabilities! prev-caps)))))
+
+(defn- image-tool []
+  (let [c (te/make-tool-execution :name "read" :args {:path "x.png"} :content "ok")]
+    (te/tool-execution-set-images! c [{:data png :mime-type "image/png"}])
+    c))
+
+(deftest test-images-fallback-without-support
+  (testing "an image result without terminal image support renders the text indicator (pi: getTextOutput + imageFallback)"
+    (with-image-env
+      {:show-images true :image-width-cells 60}
+      {:images nil :true-color true :hyperlinks true}
+      (fn []
+        (let [plain (mapv strip-ansi (core/render (image-tool) 60))]
+          (is (some #(re-find #"\[Image: \[image/png\] 1x1\]" %) plain)))))))
+
+(deftest test-images-render-when-enabled
+  (testing "an image result renders the terminal image when enabled and supported"
+    (with-image-env
+      {:show-images true :image-width-cells 20}
+      {:images :kitty :true-color true :hyperlinks true}
+      (fn []
+        (let [lines (core/render (image-tool) 60)
+              seq-line (first (filter #(str/includes? % "\u001b_G") lines))]
+          (is (some? seq-line))
+          (is (= "20" (second (re-find #"c=(\d+)" seq-line)))
+              "the configured image width caps the rendered columns")
+          (is (not-any? #(re-find #"\[Image:" %) (mapv strip-ansi lines))))))))
+
+(deftest test-images-fallback-when-show-images-off
+  (testing "show-images=false drops the image for the text indicator (pi: getTextOutput)"
+    (with-image-env
+      {:show-images false :image-width-cells 60}
+      {:images :kitty :true-color true :hyperlinks true}
+      (fn []
+        (let [lines (core/render (image-tool) 60)]
+          (is (not-any? #(str/includes? % "\u001b_G") lines))
+          (is (some #(re-find #"\[Image: \[image/png\] 1x1\]" %)
+                    (mapv strip-ansi lines))))))))
+
+(deftest test-render-context-show-images
+  (testing "renderers receive the effective show-images value — setting AND terminal support (pi: ToolRenderContext showImages)"
+    (let [prev-settings @subs/image-settings-atom
+          prev-caps (timg/get-capabilities)
+          seen (atom [])]
+      (try
+        (timg/set-capabilities! {:images :kitty :true-color true :hyperlinks true})
+        (reset! subs/image-settings-atom {:show-images false :image-width-cells 60})
+        (let [c (te/make-tool-execution
+                 :name "custom"
+                 :render-result-fn (fn [_content _is-error _theme _width _expanded
+                                        _started _ended _truncation context]
+                                     (swap! seen conj (:show-images context))
+                                     nil))]
+          (core/render c 60)
+          ;; the tracked sub read invalidates the cache; the next render
+          ;; reports the new setting
+          (reset! subs/image-settings-atom {:show-images true :image-width-cells 60})
+          (core/render c 60)
+          (is (= [false true] @seen)))
+        (finally
+          (reset! subs/image-settings-atom prev-settings)
+          (timg/set-capabilities! prev-caps))))))
+
+(deftest test-render-context-show-images-capability-gated
+  (testing "a terminal without image support reports show-images false even when the setting is on"
+    (let [prev-settings @subs/image-settings-atom
+          prev-caps (timg/get-capabilities)
+          seen (atom [])]
+      (try
+        (timg/set-capabilities! {:images nil :true-color true :hyperlinks true})
+        (reset! subs/image-settings-atom {:show-images true :image-width-cells 60})
+        (let [c (te/make-tool-execution
+                 :name "custom"
+                 :render-result-fn (fn [_content _is-error _theme _width _expanded
+                                        _started _ended _truncation context]
+                                     (swap! seen conj (:show-images context))
+                                     nil))]
+          (core/render c 60)
+          (is (= [false] @seen)))
+        (finally
+          (reset! subs/image-settings-atom prev-settings)
+          (timg/set-capabilities! prev-caps))))))

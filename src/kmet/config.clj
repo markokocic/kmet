@@ -47,6 +47,9 @@
    :autocomplete-max-visible 5
    ;; pi: treeFilterMode — default filter when opening /tree
    :tree-filter-mode :default
+   ;; pi: terminal.showImages / terminal.imageWidthCells — inline image
+   ;; display (terminal capability is consulted at render time)
+   :terminal {:show-images true :image-width-cells 60}
    :system-prompt nil
    :append-system-prompt nil
    :thinking :off
@@ -164,6 +167,21 @@
    default 1)."
   [config]
   (if (zero? (long (get config :output-pad 1))) 0 1))
+
+(defn get-show-images
+  "Whether images render inline in the terminal (pi: terminal.showImages —
+   default true). Only consulted when the terminal reports image support;
+   otherwise the render paths fall back to the text indicator."
+  [config]
+  (let [v (get-in config [:terminal :show-images])]
+    (if (nil? v) true (boolean v))))
+
+(defn get-image-width-cells
+  "Preferred inline image width in terminal cells (pi:
+   terminal.imageWidthCells — default 60, clamped to >= 1)."
+  [config]
+  (let [w (get-in config [:terminal :image-width-cells])]
+    (if (number? w) (max 1 (long w)) 60)))
 
 (defn load-config
   "Load and merge configuration from user and project directories.

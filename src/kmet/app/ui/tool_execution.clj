@@ -11,8 +11,8 @@
             [kmet.tui.components.box :as box]
             [kmet.tui.components.container :as container]
             [kmet.app.ui.tool-renderers :as renderers]
+            [kmet.app.ui.image-block :as image-block]
             [kmet.tui.components.spacer :as spacer]
-            [kmet.tui.components.image :as ic]
             [kmet.tui.macros :refer [track! defcomponent]]))
 
 ;; ─── Renderer dispatch ─────────────────────────────────────────────────────
@@ -50,8 +50,10 @@
   @(:last-result-component-atom comp))
 
 (defn- tool-execution-context
-  "Build a ToolRenderContext map for the given component and last-component."
-  [comp last-comp]
+  "Build a ToolRenderContext map for the given component and last-component.
+   SHOW-IMAGES is whether images render (the :show-images setting AND
+   terminal support — pi: ToolRenderContext showImages, made effective)."
+  [comp last-comp show-images]
   {:args @(:args-atom comp)
    :tool-call-id @(:tool-call-id-atom comp)
    ;; invalidation schedules the frame itself (§3.4 hook) — extension
@@ -68,7 +70,7 @@
    :is-partial (nil? @(:ended-at-atom comp))
    :expanded (or @(:expanded-atom comp)
                  (when-some [shared (:tools-expanded-atom comp)] @shared))
-   :show-images true
+   :show-images show-images
    :is-error @(:is-error-atom comp)})
 
 ;; ─── Record ────────────────────────────────────────────────────────────────
@@ -99,6 +101,10 @@
       (let [;; tracked read of the shared palette sub: a theme switch
             ;; re-derives this cache exactly once (Stage 5, dsl.md §3.2)
             theme (deref s/theme-sub)
+            ;; tracked read of the shared image settings: a /settings change
+            ;; (show-images / image-width-cells) re-renders every tool box
+            image-settings (deref s/image-settings-sub)
+            show-images? (image-block/images-enabled? image-settings)
             is-error @is-error-atom
             output-pad @output-pad-atom
             name @name-atom
@@ -121,11 +127,13 @@
             render-shell (or @render-shell-atom (:shell builtin) :default)
             container @inner-container
             content-width (max 1 (- width (* 2 output-pad)))
-            call-context (tool-execution-context this (last-call-component this))
+            call-context (tool-execution-context this (last-call-component this)
+                                                 show-images?)
             call-comp (render-call-fn name args theme content-width call-context)
             _ (reset! last-call-component-atom call-comp)
             truncation @truncation-atom
-            result-context (tool-execution-context this (last-result-component this))
+            result-context (tool-execution-context this (last-result-component this)
+                                                   show-images?)
             result-comp (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation result-context)
             _ (reset! last-result-component-atom result-comp)
             image-data @image-data-atom]
@@ -138,13 +146,16 @@
             (container/container-add-child container call-comp)
             (when result-comp
               (container/container-add-child container result-comp))
-          ;; Build image components from raw data (Pi: spacer + ImageComponent)
+          ;; Build image components from raw data (Pi: spacer + ImageComponent).
+          ;; image-block renders the terminal image or, when display is off /
+          ;; unsupported, the styled text indicator (pi: getTextOutput).
             (doseq [img image-data]
               (container/container-add-child container (spacer/make-spacer 1))
               (container/container-add-child container
-                                             (ic/make-image (:data img) (:mime-type img)
-                                                            {:fallback-color (fn [s] (theme/fg theme :tool-output s))}
-                                                            :max-width-cells 60)))
+                                             (image-block/make-image-block
+                                              (:data img) (:mime-type img)
+                                              :fallback-style (fn [thm s]
+                                                                (theme/fg thm :tool-output s)))))
           ;; Pi: render-shell :self skips outer Box (tool renders its own framing)
             (if (= :self render-shell)
               (let [content-lines (protocols/render container width)]

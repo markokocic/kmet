@@ -5,6 +5,7 @@
   (:require [kmet.tui.protocols :as protocols]
             [kmet.tui.theme :as theme]
             [kmet.app.ui.subs :as s]
+            [kmet.app.ui.image-block :as image-block]
             [kmet.tui.components.box :as box]
             [kmet.tui.components.text :as text]
             [kmet.tui.components.markdown :as md]
@@ -22,6 +23,7 @@
                inner-container  ;; Container holding label + content Text children
                label-atom
                content-atom
+               images-atom     ;; content image blocks (:data / :mime-type maps)
                applied-theme-atom  ;; scratch: theme the box/children were built with
                output-pad-atom
                expanded-atom   ;; current expanded state (collapsible messages)
@@ -39,7 +41,7 @@
                 (apply-theme! this thm))]
         (track-deps @inner-container @label-atom @content-atom
                     @output-pad-atom @expanded-atom @collapsed-content-atom
-                    @expanded-content-atom)
+                    @expanded-content-atom @s/image-settings-sub)
         (into [] (concat (protocols/render s width)
                          (protocols/render b width))))))
   (invalidate [_this]
@@ -73,6 +75,10 @@
         label @(:label-atom comp)
         content (current-content comp)
         container @(:inner-container comp)]
+    ;; rebuilds replace the previous children — dispose them so their track!
+    ;; watches/cleanups do not outlive them (zombie-watcher invariant)
+    (doseq [c @(:children container)]
+      (protocols/dispose c))
     (container/container-clear container)
     (when (seq label)
       (let [label-str (theme/fg theme :custom-message-label (theme/bold (str "[" label "]")))]
@@ -86,7 +92,13 @@
                                                        :theme (theme/get-markdown-theme theme)
                                                        :default-style (fn [s]
                                                                         (theme/fg theme :custom-message-text s))
-                                                       :padding-x 0)))))
+                                                       :padding-x 0)))
+    (doseq [img @(:images-atom comp)]
+      (container/container-add-child container (spacer/make-spacer 1))
+      (container/container-add-child
+       container (image-block/make-image-block
+                  (:data img) (:mime-type img)
+                  :fallback-style (fn [thm s] (theme/fg thm :custom-message-text s)))))))
 
 ;; ─── Public API (defined before make- to avoid forward ref) ──────────────
 ;; Label and plain content are fixed at construction (the atoms are the
@@ -127,6 +139,9 @@
   (let [theme (deref s/theme-sub)
         inner-container (container/make-container)
         b (box/make-box n 1 #(theme/bg theme :custom-message-bg %))]
+    ;; the old container is replaced wholesale — dispose it (children-first)
+    ;; so its children's track! watches/cleanups do not outlive it
+    (protocols/dispose @(:inner-container comp))
     (box/box-add-child b inner-container)
     (reset! (:box comp) b)
     (reset! (:inner-container comp) inner-container)
@@ -139,9 +154,10 @@
    Options:
      :label       — bracketed label line (default nil)
      :content     — message text (default \"\")
+     :images      — optional [{:data base64 :mime-type str} …] content images
      :theme       — theme map (default dark-theme)
      :output-pad  — horizontal padding (default 1)"
-  [& {:keys [label content output-pad]
+  [& {:keys [label content images output-pad]
       :or {content "" output-pad 1}}]
   (let [inner-container (container/make-container)
         s (spacer/make-spacer 1)
@@ -153,6 +169,7 @@
                                              :inner-container (atom inner-container)
                                              :label-atom (atom label)
                                              :content-atom (atom content)
+                                             :images-atom (atom (vec images))
                                              :applied-theme-atom (atom nil)
                                              :output-pad-atom (atom output-pad)
                                              :expanded-atom (atom false)

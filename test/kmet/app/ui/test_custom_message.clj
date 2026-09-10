@@ -3,6 +3,8 @@
             [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.theme :as theme]
             [kmet.tui.core :as core]
+            [kmet.libs.terminal-image :as timg]
+            [kmet.app.ui.subs :as subs]
             [kmet.app.ui.custom-message :as cm]))
 
 (defn- strip-ansi [s]
@@ -94,3 +96,25 @@
                                     :content (apply str (repeat 200 "x")))
           lines (core/render c 30)]
       (is (> (count lines) 3) "Long content should wrap to multiple lines"))))
+
+;; ─── Content images (P2: terminal.showImages) ──────────────────────────────
+
+(def ^:private png
+  "A 1x1 PNG."
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+
+(deftest test-images-render-inline
+  (testing "content images render inside the message box (text indicator without protocol support)"
+    (let [prev-settings @subs/image-settings-atom
+          prev-caps (timg/get-capabilities)]
+      (try
+        (reset! subs/image-settings-atom {:show-images true :image-width-cells 60})
+        (timg/set-capabilities! {:images nil :true-color true :hyperlinks true})
+        (let [c (cm/make-custom-message :label "ext" :content "hi"
+                                        :images [{:data png :mime-type "image/png"}])
+              plain (mapv strip-ansi (core/render c 60))]
+          (is (some #(re-find #"hi" %) plain))
+          (is (some #(re-find #"\[Image: \[image/png\] 1x1\]" %) plain)))
+        (finally
+          (reset! subs/image-settings-atom prev-settings)
+          (timg/set-capabilities! prev-caps))))))

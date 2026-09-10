@@ -350,7 +350,8 @@ signal+ctx unconditionally). Extension tools may also declare
 they replace the builtin transcript rendering for that tool's calls/results
 and receive the same `ToolRenderContext` map the builtin renderers get
 (args, tool-call-id, invalidate, state/set-state!, cwd, is-partial,
-expanded, is-error). `:render-shell :self` lets the renderer own its outer
+expanded, is-error, show-images — whether images render: the
+`:terminal :show-images` setting AND terminal image support). `:render-shell :self` lets the renderer own its outer
 box, padding, and status background. The supported reusable built-in
 renderer vars are in `kmet.app.ui.tool-renderers`, including
 `render-edit-call` and `render-edit-result`; the namespace is explicitly

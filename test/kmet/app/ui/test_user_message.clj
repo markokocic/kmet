@@ -3,6 +3,8 @@
             [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.theme :as theme]
             [kmet.tui.core :as core]
+            [kmet.libs.terminal-image :as timg]
+            [kmet.app.ui.subs :as subs]
             [kmet.app.ui.user-message :as um]))
 
 (defn- strip-ansi [s]
@@ -63,3 +65,64 @@
     (let [c (um/make-user-message :text (apply str (repeat 200 "x")))
           lines (core/render c 40)]
       (is (> (count lines) 3) "Long text should wrap to multiple lines"))))
+
+;; ─── Image attachments (P2: terminal.showImages) ───────────────────────────
+
+(def ^:private png
+  "A 1x1 PNG."
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+
+(defn- with-image-env
+  "Run F with the shared image settings and terminal capabilities bound
+   (both are process-global); restore afterwards."
+  [settings caps f]
+  (let [prev-settings @subs/image-settings-atom
+        prev-caps (timg/get-capabilities)]
+    (try
+      (reset! subs/image-settings-atom settings)
+      (timg/set-capabilities! caps)
+      (f)
+      (finally
+        (reset! subs/image-settings-atom prev-settings)
+        (timg/set-capabilities! prev-caps)))))
+
+(deftest test-images-render-fallback
+  (testing "attached images render as image elements inside the message (text indicator without protocol support)"
+    (with-image-env
+      {:show-images true :image-width-cells 60}
+      {:images nil :true-color true :hyperlinks true}
+      (fn []
+        (let [c (um/make-user-message :text "see:"
+                                      :images [{:data png :mime-type "image/png"}])
+              plain (mapv strip-ansi (core/render c 60))]
+          (is (some #(re-find #"see:" %) plain))
+          (is (some #(re-find #"\[Image: \[image/png\] 1x1\]" %) plain)))))))
+
+(deftest test-images-follow-settings-live
+  (testing "a show-images change re-renders mounted message images"
+    (with-image-env
+      {:show-images true :image-width-cells 20}
+      {:images :kitty :true-color true :hyperlinks true}
+      (fn []
+        (let [c (um/make-user-message :text "see:"
+                                      :images [{:data png :mime-type "image/png"}])
+              seq-line (fn [lines] (first (filter #(str/includes? % "\u001b_G") lines)))]
+          (is (= "20" (second (re-find #"c=(\d+)" (seq-line (core/render c 60))))))
+          (reset! subs/image-settings-atom {:show-images false :image-width-cells 20})
+          (let [lines (core/render c 60)]
+            (is (not-any? #(str/includes? % "\u001b_G") lines))
+            (is (some #(re-find #"\[Image: \[image/png\] 1x1\]" %)
+                      (mapv strip-ansi lines)))))))))
+
+(deftest test-images-survive-output-pad-rebuild
+  (testing "set-output-pad! rebuilds the box without dropping the image blocks"
+    (with-image-env
+      {:show-images true :image-width-cells 60}
+      {:images nil :true-color true :hyperlinks true}
+      (fn []
+        (let [c (um/make-user-message :text "see:" :output-pad 1
+                                      :images [{:data png :mime-type "image/png"}])]
+          (um/user-message-set-output-pad! c 3)
+          (let [plain (mapv strip-ansi (core/render c 60))]
+            (is (some #(re-find #"see:" %) plain))
+            (is (some #(re-find #"\[Image: \[image/png\] 1x1\]" %) plain))))))))

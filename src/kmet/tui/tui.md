@@ -770,10 +770,14 @@ Frame glyphs come from `kmet.tui.border` (§2.8), not from the components:
 app-layer `bash_execution` its box — each with a `:border` style.
 
 Message-like app components live in `kmet.app.ui.*`, not here — this layer
-stays generic: chat history, tool executions, and the skill invocation
+stays generic: chat history, tool executions, the skill invocation
 message (`skill_message`, which renders a `/skill:name` block as a
 collapsible `[skill] name (ctrl+o to expand)` entry — pi:
-SkillInvocationMessageComponent).
+SkillInvocationMessageComponent), and the inline image block
+(`image_block`: one image rendered as the terminal image, or as the
+`imageFallback` text indicator when the `:terminal {:show-images …}`
+setting is off or the terminal lacks protocol support — pi:
+ToolExecutionComponent's Image child + `getTextOutput`).
 
 ---
 
@@ -895,7 +899,10 @@ implemented** — this is a plan record, kept so the analysis behind the
 decisions is not lost. When an item lands, fold its behavior into the
 relevant section, add it to the Done table and strike it from the plan.
 
-Two sources feed it:
+Sources: the R items are ideas borrowed from glimmer; the P items (pi
+parity) that fed this layer have all landed (P1, P2). The remaining
+kmet↔pi gaps are tracked in `alignment.md` §2, and the rendering-shaped
+ones are postponed below.
 
 - **R items — ideas borrowed from [glimmer](https://github.com/jolt-lang/glimmer)**
   (a reactive core + reagent-style component model targeting Jolt) and
@@ -905,9 +912,6 @@ Two sources feed it:
   no render cache, and a parent re-render re-invokes every child body —
   whereas kmet's narrower layer already runs on both bb and Jolt. So the
   R items are idea-level borrows only.
-- **P items — pi parity**, the remaining kmet↔pi gaps that belong to this
-  layer (`alignment.md` §2 tracks the full list; its other rendering gaps
-  are postponed, below).
 
 ### Done
 
@@ -918,6 +922,7 @@ Two sources feed it:
 | R6 | `^{:key}` metadata | keys read from element metadata as well as the `:key` prop (§2.1) |
 | R3a | key labels | `keys/key-label` + `keybindings/key-label-text` (§7.1) — hints and the tree help render `pgup`/`↑`, replacing the private `prettify-keys` regex pass |
 | P1 | skill invocation message | `kmet.app.skills/parse-skill-block` (the inverse of the expander) + `kmet.app.ui.skill-message` — a `/skill:name` block renders as a collapsible `[skill] name (ctrl+o to expand)` message instead of dumping its body into the transcript |
+| P2 | images in chat (TUI half) | `kmet.app.ui.image_block` + the live `ui.subs/image-settings-sub`: tool-result and user/custom-message images render inline, or as the `imageFallback` text indicator when `:show-images` is off / the terminal lacks support; `:terminal {:show-images :image-width-cells}` in `config.clj` + terminal-support-gated `/settings` rows. The wire half (`images.blockImages`, `images.autoResize`) is provider work — tracked in `alignment.md` §2 |
 
 ### Plan — borrowed from glimmer
 
@@ -927,12 +932,6 @@ Two sources feed it:
 | R2 | writable cursor | `reakt/cursor` is read-only; two-way binding needs an atom + setter callback | `kmet.libs.reakt` | small |
 | R3b | focus-derived help line | nothing shows what the focused component answers to; hint lines are hand-written per dialog | a help-line component + where per-component declarations live | small |
 | R7 | declarative `:overlay` | dialogs are shown imperatively; declaration site ≠ owner | `hiccup.clj` + `tui.core` | large (spike) |
-
-### Plan — pi parity
-
-| # | parity | kmet pain point | lands in | size |
-|---|---|---|---|---|
-| P2 | images in chat | images render only in tool executions, and `:show-images` is hardcoded `true` in the renderer context; no settings, no inline/custom-message images | settings + renderer context + message components (`kmet.libs.terminal-image` already has the hard parts) | medium |
 
 ### Postponed indefinitely
 
@@ -1020,41 +1019,6 @@ portable verbatim: kmet's in-tree layout is line concatenation, with no
 screen coordinates to anchor to. Needs a tree → session hook (a dynamic var
 around a mount, or a per-session registry) — that hook is the spike.
 
-### P2 — images in chat
-
-**Pain.** Tool-execution images render, but `:show-images` is hardcoded
-`true` in the renderer context (`app/ui/tool_execution.clj`), so there is
-no way to turn them off, and nothing else can carry an image: user and
-custom messages cannot, and the terminal's image capabilities are not
-consulted when a result's content holds an image block.
-
-**Parity.** pi's four settings: `terminal.showImages` (default true; off,
-or a terminal without image support, renders a text indicator —
-`imageFallback(mimeType, dimensions)` — instead of the image),
-`terminal.imageWidthCells` (default 60), `images.autoResize` (default true;
-images resized to 2000×2000 before being sent to a provider) and
-`images.blockImages` (default false; strips every image from provider
-calls). Plus the `show-images-selector` row in the settings UI.
-
-**Proposal.** Split by layer, TUI half first:
-
-- thread a `:show-images` value (setting + capability check) into the
-  renderer context instead of the hardcoded `true`, falling back to
-  `image-fallback` — the plumbing (`libs/terminal-image` capabilities,
-  the `:image` component, the tool-execution image path) already exists;
-- `terminal.show-images` and `terminal.image-width-cells` in
-  `config.clj`, applied by the `:image` component's `:max-width-cells` and
-  the tool-execution renderer;
-- inline images in user/custom messages (the same `:image` element inside
-  the message components);
-- a `/settings` row for `show-images` (the old definition of done in
-  `alignment.md` §6).
-
-The wire half — `images.blockImages` (strip image blocks before a provider
-call) and `images.autoResize` (resize before sending) — touches
-`kmet.ai.*` request building, not this layer; track it with the model /
-provider work, with the settings keys defined once in `config.clj`.
-
 ### Deliberately not borrowing
 
 Recorded so the analysis is not redone:
@@ -1094,8 +1058,7 @@ Recorded so the analysis is not redone:
 ### Suggested order
 
 R1 + R2 together: R2 gives R1 its natural call site, and R1 is the
-props/state migration → P2 (the TUI half; the wire half rides the provider
-work) → R7 as a spike, once the tag-table extension path has been used once
-(R5, R6, R3a, R4 and P1 have exercised it). R3b waits on the declarations
-decision.
+props/state migration → R7 as a spike, once the tag-table extension path
+has been used once (R5, R6, R3a, R4, P1 and P2 have exercised it). R3b
+waits on the declarations decision.
 

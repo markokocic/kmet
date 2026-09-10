@@ -3,6 +3,7 @@
             [clojure.test :as t :refer [deftest is testing]]
             [kmet.tui.core :as core]
             [kmet.tui.macros :as macros]
+            [kmet.libs.terminal-image :as timg]
             [kmet.app.ui :as ui]
             [kmet.app.ui.chat-history :as ch]))
 
@@ -316,16 +317,21 @@
         (is (not-any? #(re-find #"\{:type" %) lines)
             "raw block vector must not render")))))
 
-(deftest test-user-message-image-placeholder
-  (testing "image blocks render as [image mime-type] placeholders"
-    (let [ch (ch/make-chat-history)]
-      (ch/chat-history-add-message! ch
-                                    {:role :user
-                                     :content [{:type :text :text "see:"}
-                                               {:type :image :data "AA" :mime-type "image/png"}]})
-      (let [lines (plain-lines ch 40)]
-        (is (some #(re-find #"see:" %) lines))
-        (is (some #(re-find #"\[image image/png\]" %) lines))))))
+(deftest test-user-message-image-renders-inline
+  (testing "image blocks render as image elements — without protocol support the text indicator, never [image mime] placeholders"
+    (let [prev-caps (timg/get-capabilities)]
+      (try
+        (timg/set-capabilities! {:images nil :true-color true :hyperlinks true})
+        (let [ch (ch/make-chat-history)]
+          (ch/chat-history-add-message! ch
+                                        {:role :user
+                                         :content [{:type :text :text "see:"}
+                                                   {:type :image :data "AA" :mime-type "image/png"}]})
+          (let [lines (plain-lines ch 40)]
+            (is (some #(re-find #"see:" %) lines))
+            (is (some #(re-find #"\[Image: \[image/png\] 800x600\]" %) lines))
+            (is (not-any? #(re-find #"\[image image/png\]" %) lines))))
+        (finally (timg/set-capabilities! prev-caps))))))
 
 (deftest test-show-status
   (testing "status line renders and is not persisted as a message"

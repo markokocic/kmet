@@ -309,6 +309,22 @@
     (t/is (= 0 (cfg/get-output-pad {:output-pad 0})))
     (t/is (= 1 (cfg/get-output-pad {:output-pad 7})))))
 
+(t/deftest test-image-display-getters
+  (t/testing "show-images defaults to true (pi: terminal.showImages)"
+    (t/is (true? (cfg/get-show-images {})))
+    (t/is (true? (cfg/get-show-images cfg/default-config)))
+    (t/is (true? (cfg/get-show-images {:terminal {:show-images true}})))
+    (t/is (false? (cfg/get-show-images {:terminal {:show-images false}})))
+    (t/is (true? (cfg/get-show-images {:terminal {:show-images nil}}))
+          "an explicit nil falls back to the default"))
+  (t/testing "image width defaults to 60 and clamps to >= 1 (pi: terminal.imageWidthCells)"
+    (t/is (= 60 (cfg/get-image-width-cells {})))
+    (t/is (= 60 (cfg/get-image-width-cells cfg/default-config)))
+    (t/is (= 80 (cfg/get-image-width-cells {:terminal {:image-width-cells 80}})))
+    (t/is (= 1 (cfg/get-image-width-cells {:terminal {:image-width-cells 0}})))
+    (t/is (= 60 (cfg/get-image-width-cells {:terminal {:image-width-cells "wide"}}))
+          "non-numeric values fall back to the default")))
+
 (t/deftest test-get-tree-filter-mode
   (t/is (= :default (cfg/get-tree-filter-mode {})))
   (t/is (= :no-tools (cfg/get-tree-filter-mode {:tree-filter-mode :no-tools})))

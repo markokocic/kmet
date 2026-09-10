@@ -13,6 +13,8 @@
             [kmet.tui.hiccup :as hiccup]
             [kmet.libs.reakt :as r]
             [kmet.app.ui :as ui]
+            [kmet.app.ui.subs :as subs]
+            [kmet.app.ui.image-block :as image-block]
             [kmet.app.ui.custom-dialog-adapter :as cda]
             [kmet.app.ui.auth-selector :as auth-selector]
             [kmet.app.ui.dock :as dock]
@@ -1507,6 +1509,7 @@
                  (if (map? msg) msg {:component msg}))
                {:role :info
                 :content (custom-message-text e)
+                :images (image-block/content-images (:content e))
                 :label (:custom-type e)})))
 
           (= role :assistant)
@@ -3106,6 +3109,7 @@
                         (if (map? msg) msg {:component msg}))
                       (assoc m :role :info
                              :content (custom-message-text m)
+                             :images (image-block/content-images (:content m))
                              :label (:custom-type m)))
                     m))
                 (remove #(and (= :custom (:role %))
@@ -3140,7 +3144,9 @@
                                   :when (= :text (:type b))]
                               (:text b))))]
                 (ui/chat-history-insert-before-streaming! chat-history
-                                                          (assoc m :content text))
+                                                          (assoc m
+                                                                 :content text
+                                                                 :images (image-block/content-images (:content m))))
                 (tui/tui-request-render tui))
                             ;; extension custom messages (pi: custom messages
                             ;; render when display=true — a registered message
@@ -3156,6 +3162,7 @@
                              (if (map? msg) msg {:component msg}))
                            (assoc m :role :info
                                   :content (custom-message-text m)
+                                  :images (image-block/content-images (:content m))
                                   :label (:custom-type m))))))
                     (tui/tui-request-render tui))
         nil)
@@ -3222,6 +3229,12 @@
 
         ;; Components (define before agent state so on-event can reference them)
         sp1 (spacer/make-spacer 1)
+        ;; Inline image display settings (pi: terminal.showImages /
+        ;; terminal.imageWidthCells) — seeded here, then read live by every
+        ;; image (tool results, message attachments) through the shared sub
+        _ (reset! subs/image-settings-atom
+                  {:show-images (cfg/get-show-images config)
+                   :image-width-cells (cfg/get-image-width-cells config)})
         ;; no :theme — message components subscribe to ui.subs/theme-sub
         ;; themselves (Stage 5)
         ch (ui/make-chat-history
