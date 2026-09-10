@@ -243,7 +243,7 @@
         (doseq [line (model-catalog/model-info-lines selected-model)]
           (container/container-add-child
            rows (text/make-text line 1 0)))))
-    (container/container-set-children! (:list-container this) @(:children rows))
+    (container/container-replace-children! (:list-container this) @(:children rows))
     (when-let [stx (:scope-text this)]
       (text/text-set! stx (scope-text-str st)))
     (when-let [sh (:scope-hint-text this)]

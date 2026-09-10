@@ -165,7 +165,7 @@
                                      "No providers logged in. Use /login first.")
                                    "No matching providers")))
              :padding-x 1)))
-    (container/container-set-children! (:list-container this) @(:children rows))))
+    (container/container-replace-children! (:list-container this) @(:children rows))))
 
 (defn make-auth-selector
   "Create the auth provider selector (pi OAuthSelectorComponent).
@@ -301,7 +301,7 @@
                  (str (theme/fg th :accent "→ ") (theme/fg th :accent option))
                  (str "  " (theme/fg th :text option)))
                1 0))))
-    (container/container-set-children! (:list-container this) @(:children rows))))
+    (container/container-replace-children! (:list-container this) @(:children rows))))
 
 (defn make-auth-method-selector
   "Create the auth-method selector (pi showLoginAuthTypeSelector's

@@ -3675,17 +3675,10 @@
     (vals (r/tracked-deref widgets-atom))))
 
 (defn- dispose-dialog-component!
-  "Dispose an extension dialog/widget value: duck-typed maps carry a
-   :dispose fn; everything else disposes through the protocol's
-   multimethod — which dispatches correctly under SCI even when
-   satisfies? does not (bb reify limitation)."
+  "Dispose an extension dialog/widget value (kmet.app.ui.custom-dialog-adapter/
+   dispose-component! — duck-typed :dispose, else the protocol multimethod)."
   [component]
-  ;; :dispose key (duck-typed maps) wins; otherwise the protocol
-  ;; multimethod — which also covers records, since (:dispose record)
-  ;; is nil unless a field of that name exists.
-  (if-let [dispose (:dispose component)]
-    (try (dispose) (catch Exception _))
-    (try (protocols/dispose component) (catch Exception _))))
+  (cda/dispose-component! component))
 
 (defn- make-extension-widget-component
   "Widget content forms (pi: renderWidgets' map values):

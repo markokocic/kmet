@@ -11,6 +11,7 @@
             [kmet.tui.components.box :as box]
             [kmet.tui.components.container :as container]
             [kmet.app.ui.tool-renderers :as renderers]
+            [kmet.app.ui.custom-dialog-adapter :as cda]
             [kmet.app.ui.image-block :as image-block]
             [kmet.tui.components.spacer :as spacer]
             [kmet.tui.macros :refer [track! defcomponent]]))
@@ -52,7 +53,14 @@
 (defn- tool-execution-context
   "Build a ToolRenderContext map for the given component and last-component.
    SHOW-IMAGES is whether images render (the :show-images setting AND
-   terminal support — pi: ToolRenderContext showImages, made effective)."
+   terminal support — pi: ToolRenderContext showImages, made effective).
+
+   :last-component is the previous pass's renderer output. A renderer that
+   keeps its own instance returns it back to REUSE it (the identical
+   instance is left alone); anything else the renderer returns replaces the
+   old output, which is then disposed — the same drop-disposes contract as
+   every other component in the tree (tui.md §5.1) — so a renderer holding
+   a dropped component across passes must not expect it to stay live."
   [comp last-comp show-images]
   {:args @(:args-atom comp)
    :tool-call-id @(:tool-call-id-atom comp)
@@ -128,39 +136,53 @@
             render-shell (or @render-shell-atom (:shell builtin) :default)
             container @inner-container
             content-width (max 1 (- width (* 2 output-pad)))
-            call-context (tool-execution-context this (last-call-component this)
-                                                 show-images?)
+            ;; Previous pass's renderer outputs: passed to the renderers as
+            ;; :last-component so an extension renderer may reuse its own
+            ;; instance, and disposed below unless the renderer returned the
+            ;; same one back (renderers may return IComponent or nil).
+            prev-call (last-call-component this)
+            call-context (tool-execution-context this prev-call show-images?)
             call-comp (render-call-fn name args theme content-width call-context)
             _ (reset! last-call-component-atom call-comp)
             truncation @truncation-atom
-            result-context (tool-execution-context this (last-result-component this)
-                                                   show-images?)
+            prev-result (last-result-component this)
+            result-context (tool-execution-context this prev-result show-images?)
             result-comp (render-result-fn content is-error theme content-width expanded? started-at ended-at truncation result-context)
             _ (reset! last-result-component-atom result-comp)
-            image-data @image-data-atom]
+            image-data @image-data-atom
+            obsolete (into []
+                           (remove #(or (identical? % call-comp)
+                                        (identical? % result-comp)))
+                           [prev-call prev-result])]
       ;; Pi: hide component when no call/render content and no images
         (if (and (nil? call-comp) (nil? result-comp) (not (seq image-data)))
           (do
-            ;; images disappeared — drop their children too (a stale
-            ;; ImageBlock would keep its track! watches alive)
+            ;; nothing renders — drop the dropped children (a stale child
+            ;; would keep its track! watches alive; the renderers may return
+            ;; duck-typed maps, so disposal goes through dispose-component!)
+            (doseq [c obsolete]
+              (cda/dispose-component! c))
             (doseq [c @image-children-atom]
-              (protocols/dispose c))
+              (cda/dispose-component! c))
             (reset! image-children-atom [])
+            (container/container-clear container)
             [])
           (do
           ;; Build inner container
             (container/container-clear container)
-            (container/container-add-child container call-comp)
+            (doseq [c obsolete]
+              (cda/dispose-component! c))
+            (when call-comp
+              (container/container-add-child container call-comp))
             (when result-comp
               (container/container-add-child container result-comp))
           ;; Build image components from raw data (Pi: spacer + ImageComponent).
           ;; image-block renders the terminal image or, when display is off /
           ;; unsupported, the styled text indicator (pi: getTextOutput).
-          ;; The previous pass's image children are disposed first: an
-          ;; ImageBlock subscribes to the image-settings/theme subs, so a
-          ;; dropped instance would keep its track! watches alive forever
-          ;; (zombie watchers, tui.md §5.1). Call/result components are not
-          ;; touched — extension renderers may reuse them via :last-component.
+          ;; The previous pass's image children are disposed with the other
+          ;; dropped children: an ImageBlock subscribes to the
+          ;; image-settings/theme subs, so a dropped instance would keep its
+          ;; track! watches alive forever (zombie watchers, tui.md §5.1).
             (let [children (into []
                                  (mapcat (fn [img]
                                            [(spacer/make-spacer 1)
@@ -170,7 +192,7 @@
                                                                (theme/fg thm :tool-output s)))]))
                                  image-data)]
               (doseq [c @image-children-atom]
-                (protocols/dispose c))
+                (cda/dispose-component! c))
               (reset! image-children-atom children)
               (doseq [c children]
                 (container/container-add-child container c)))
@@ -202,6 +224,11 @@
       (when-let [id (:timer-id state)]
         (timers/cancel! id)))
     (protocols/dispose @box)
+    ;; image children still outside the container (the hide path cleared it)
+    ;; — disposal is idempotent, so the container-owned ones are harmless to
+    ;; touch again
+    (doseq [c @(:image-children-atom _this)]
+      (cda/dispose-component! c))
     (reset! (:image-children-atom _this) [])))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────

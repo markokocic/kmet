@@ -9,7 +9,9 @@
             [kmet.app.ui.model-selector :as ms]
             [kmet.ai.models :as models]
             [kmet.tui.components.input :as input]
+            [kmet.tui.core :as core]
             [kmet.tui.keybindings :as tui-kb]
+            [kmet.tui.macros :as macros]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.utils :as u]))
 
@@ -168,3 +170,15 @@
     (press sel "down")
     (t/is (str/includes? (row-text sel 5) "Cost: free")
           "unpriced model renders the free line")))
+
+(t/deftest test-row-rebuilds-do-not-leak-watches
+  ;; Rows are rebuilt on every navigation (pi updateList). The replaced rows
+  ;; must be disposed — a dropped Text keeps its track! watch registered,
+  ;; which would grow the registry per keypress and pin the components.
+  (let [sel (selector)
+        watchers #(count @(deref #'macros/watch-registry))]
+    (core/render sel 80)
+    (let [baseline (watchers)]
+      (dotimes [_ 6] (press sel "down") (core/render sel 80))
+      (t/is (= baseline (watchers))
+            "steady state: navigation does not accumulate watches"))))

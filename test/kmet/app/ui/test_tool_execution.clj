@@ -9,7 +9,8 @@
             [kmet.tui.macros :as macros]
             [kmet.app.ui.subs :as subs]
             [kmet.app.ui.tool-execution :as te]
-            [kmet.app.ui.tool-renderers :as renderers]))
+            [kmet.app.ui.tool-renderers :as renderers]
+            [kmet.tui.components.text :as text]))
 
 (defn- strip-ansi [s]
   (utils/strip-ansi-codes s))
@@ -661,3 +662,74 @@
               (is (not (watched? old-img))
                   "the previous image block's watches are torn down")
               (is (watched? new-img) "the new image block is watched"))))))))
+
+;; ─── Renderer-child lifecycle (track! zombie-watch regression) ────────────
+
+(defn- tracked?
+  "True when COMP is registered in the track! watch registry (its render ran
+   with watches)."
+  [comp]
+  (contains? @(deref #'kmet.tui.macros/watch-registry)
+             (keyword (str "track!" (System/identityHashCode comp)))))
+
+(deftest test-renderer-children-disposed-on-rebuild
+  (testing "a cache-miss rebuild disposes the previous renderer outputs — no
+            zombie track! watches from dropped call/result components"
+    (let [made (atom [])
+          c (te/make-tool-execution
+             :name "custom"
+             :render-call-fn (fn [& _]
+                               (let [comp (text/make-text "call" 0 0)]
+                                 (swap! made conj comp)
+                                 comp)))]
+      (core/render c 40)
+      (let [first-call (last @made)]
+        (is (tracked? first-call) "the first pass's call component is watched")
+        (reset! (:expanded-atom c) true)  ;; cache miss → rebuild
+        (core/render c 40)
+        (is (not (identical? first-call (last @made))))
+        (is (not (tracked? first-call))
+            "the replaced call component's watches are torn down")))))
+
+(deftest test-renderer-reused-component-survives-rebuild
+  (testing "a renderer returning its :last-component keeps that instance —
+            it is re-added, never disposed"
+    (let [made (atom [])
+          c (te/make-tool-execution
+             :name "custom"
+             :render-call-fn (fn [_name _args _theme _width context]
+                               (or (:last-component context)
+                                   (let [comp (text/make-text "call" 0 0)]
+                                     (swap! made conj comp)
+                                     comp))))]
+      (core/render c 40)
+      (let [first-call (last @made)]
+        ;; a cache miss with the renderer reusing its component
+        (reset! (:expanded-atom c) true)
+        (core/render c 40)
+        (is (identical? first-call (last @made)) "only one component was made")
+        (is (= first-call @(:last-call-component-atom c)))
+        (is (tracked? first-call)
+            "the reused instance was not disposed (its watches survive)")))))
+
+(deftest test-nil-call-component-renders
+  (testing "a renderer returning nil for the call renders the result alone
+            (renderers return IComponent or nil — a nil child must not reach
+            the container, which would crash the render loop)"
+    (let [c (te/make-tool-execution :name "custom" :content "out"
+                                    :render-call-fn (fn [& _] nil))
+          plain (mapv strip-ansi (core/render c 60))]
+      (is (some #(re-find #"out" %) plain)))))
+
+(deftest test-renderer-child-watch-count-stable
+  (testing "repeated cache-miss renders do not grow the watch registry — the
+            dropped children are disposed each pass"
+    (let [c (te/make-tool-execution :name "read" :args {:path "a.clj"} :content "x")
+          watchers (fn [] (count @(deref #'kmet.tui.macros/watch-registry)))]
+      (core/render c 60)
+      (let [baseline (watchers)]
+        (dotimes [i 5]
+          (reset! (:expanded-atom c) (odd? i))
+          (core/render c 60))
+        (is (= baseline (watchers))
+            "steady state: no accumulation across rebuilds")))))

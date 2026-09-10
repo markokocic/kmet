@@ -331,7 +331,7 @@
         (doseq [line (model-catalog/model-info-lines (:model item))]
           (container/container-add-child
            rows (text/make-text line 1 0)))))
-    (container/container-set-children! (:rows-container this) @(:children rows))
+    (container/container-replace-children! (:rows-container this) @(:children rows))
     (text/text-set! (:footer-text this) (footer-text-str st))))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────

@@ -74,31 +74,30 @@
   (let [theme (deref s/theme-sub)
         label @(:label-atom comp)
         content (current-content comp)
-        container @(:inner-container comp)]
-    ;; rebuilds replace the previous children — dispose them so their track!
-    ;; watches/cleanups do not outlive them (zombie-watcher invariant)
-    (doseq [c @(:children container)]
-      (protocols/dispose c))
-    (container/container-clear container)
-    (when (seq label)
-      (let [label-str (theme/fg theme :custom-message-label (theme/bold (str "[" label "]")))]
-        (container/container-add-child container
-                                       (text/make-text label-str 0 0)))
-      ;; pi: box.addChild(new Spacer(1)) — blank line between label and content
-      (container/container-add-child container (spacer/make-spacer 1)))
-    (when (seq content)
-      (container/container-add-child container
-                                     (md/make-markdown content
-                                                       :theme (theme/get-markdown-theme theme)
-                                                       :default-style (fn [s]
-                                                                        (theme/fg theme :custom-message-text s))
-                                                       :padding-x 0)))
-    (doseq [img @(:images-atom comp)]
-      (container/container-add-child container (spacer/make-spacer 1))
-      (container/container-add-child
-       container (image-block/make-image-block
-                  (:data img) (:mime-type img)
-                  :fallback-style (fn [thm s] (theme/fg thm :custom-message-text s)))))))
+        container @(:inner-container comp)
+        label-children (when (seq label)
+                         (let [label-str (theme/fg theme :custom-message-label
+                                                   (theme/bold (str "[" label "]")))]
+                           [(text/make-text label-str 0 0)
+                            ;; pi: box.addChild(new Spacer(1)) — blank line
+                            ;; between label and content
+                            (spacer/make-spacer 1)]))
+        content-children (when (seq content)
+                           [(md/make-markdown content
+                                              :theme (theme/get-markdown-theme theme)
+                                              :default-style (fn [s]
+                                                               (theme/fg theme :custom-message-text s))
+                                              :padding-x 0)])
+        image-children (mapcat (fn [img]
+                                 [(spacer/make-spacer 1)
+                                  (image-block/make-image-block
+                                   (:data img) (:mime-type img)
+                                   :fallback-style (fn [thm s] (theme/fg thm :custom-message-text s)))])
+                               @(:images-atom comp))]
+    ;; replace (not clear+add): the dropped children are disposed, so their
+    ;; track! watches/cleanups do not outlive them (zombie-watcher invariant)
+    (container/container-replace-children!
+     container (concat label-children content-children image-children))))
 
 ;; ─── Public API (defined before make- to avoid forward ref) ──────────────
 ;; Label and plain content are fixed at construction (the atoms are the

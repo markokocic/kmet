@@ -956,6 +956,25 @@
       ((var-get #'inter/dispose-dialog-component!) c)
       (t/is (= 0 @cleanups) "dispose unwinds on dialog close"))))
 
+(deftest test-dispose-dialog-component-shapes
+  (testing "dispose-dialog-component! (kmet.app.ui.custom-dialog-adapter/
+            dispose-component!) handles every component shape: duck-typed
+            maps via their :dispose key, records via the protocol, nil
+            no-op — and a throwing foreign dispose never propagates"
+    (let [dispose! (var-get #'inter/dispose-dialog-component!)
+          called (atom 0)]
+      (dispose! {:render (fn [_] ["duck"]) :dispose (fn [] (swap! called inc))})
+      (t/is (= 1 @called) "duck-typed :dispose invoked")
+      (dispose! {:render (fn [_] ["duck"]) :dispose (fn [] (throw (ex-info "boom" {})))})
+      (t/is true "a throwing foreign dispose is swallowed")
+      (dispose! {:render (fn [_] ["no dispose key"])})
+      (t/is true "a map without :dispose does not propagate the dispatch error")
+      (dispose! nil)
+      (t/is true "nil is a no-op")
+      (let [c (hiccup/compile-tree [:container {} [:text {:padding-x 0 :padding-y 0} "x"]])]
+        (dispose! c)
+        (t/is true "records dispatch through the protocol")))))
+
 (deftest test-widget-string-vector-no-longer-lines
   (testing "breaking change: string vectors are NOT line lists anymore —
             they fail tree compilation loudly instead of silently rendering

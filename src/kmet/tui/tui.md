@@ -522,6 +522,13 @@ overlay close, reconcile removal, shutdown; implementations must be
 
 - **Order is contractual**: containers dispose children first, then run
   their own cleanups — a child cleanup may still read intact parent state.
+- Child lists are replaced through `container-replace-children!` when the
+  old children are discarded for good — it disposes the ones it drops, so
+  a rebuild cannot leak their track! watches. `container-set-children!`
+  moves children without disposing: use it when the previous children are
+  reused elsewhere (the imperative equivalent of the reconciler's dispose
+  branch). Rebuilding by hand (`container-clear` + re-add) is the leak the
+  helper exists to prevent.
 - Hand-rolled implementors (reify/defrecord outside `defcomponent`) MUST
   include `dispose` — there is no universal default under SCI.
 - `defcomponent` prepends track-watch teardown to every dispose: watches

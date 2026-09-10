@@ -15,7 +15,8 @@
             [kmet.tui.macros :as macros :refer [with-let defcomponent]]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.components.stack :as stack]
-            [kmet.libs.reakt :as rag]))
+            [kmet.libs.reakt :as rag]
+            [kmet.libs.terminal-image :as timg]))
 
 (defn- joined [tree width]
   (str/join "\n" (h/render-lines tree width)))
@@ -261,9 +262,14 @@
     (t/is (str/includes? (str/join "\n" (h/render-lines (mk true) 30)) "EXPANDED"))))
 
 (t/deftest image-tag-renders-fallback
-  ;; no Kitty protocol in the test terminal → the text fallback line
-  (let [lines (h/render-lines [:image {:base64-data "AAA=" :mime-type "image/png"}] 40)]
-    (t/is (str/includes? (str/join "\n" lines) "image/png"))))
+  ;; capabilities stubbed to "no image protocol" — the fallback must not
+  ;; depend on the terminal the test happens to run in
+  (let [prev-caps (timg/get-capabilities)]
+    (try
+      (timg/set-capabilities! {:images nil :true-color true :hyperlinks false})
+      (let [lines (h/render-lines [:image {:base64-data "AAA=" :mime-type "image/png"}] 40)]
+        (t/is (str/includes? (str/join "\n" lines) "image/png")))
+      (finally (timg/set-capabilities! prev-caps)))))
 
 (t/deftest select-list-tag
   ;; primary :items; callbacks wired on the instance

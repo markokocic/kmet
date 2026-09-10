@@ -197,7 +197,7 @@
                             (= level (:default st))
                             name-width)
                  1 0)))))
-    (container/container-set-children! (:rows-container this) @(:children rows))
+    (container/container-replace-children! (:rows-container this) @(:children rows))
     nil))
 
 ;; ─── Construction ──────────────────────────────────────────────────────────

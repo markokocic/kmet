@@ -126,19 +126,18 @@
   (reset! (:expanded-atom comp) (boolean expanded?))
   (let [thm (deref s/theme-sub)
         container @(:inner-container comp)
-        name @(:skill-name-atom comp)]
-    (container/container-clear container)
-    (if expanded?
-      (do
-        (container/container-add-child container (text/make-text (bracket thm) 0 0))
-        (container/container-add-child
-         container
-         (md/make-markdown (str "**" name "**\n\n" @(:content-atom comp))
-                           :theme (theme/get-markdown-theme thm)
-                           :default-style (fn [s] (theme/fg thm :custom-message-text s))
-                           :padding-x 0)))
-      (container/container-add-child container
-                                     (text/make-text (collapsed-line thm name) 0 0)))))
+        name @(:skill-name-atom comp)
+        children
+        (if expanded?
+          [(text/make-text (bracket thm) 0 0)
+           (md/make-markdown (str "**" name "**\n\n" @(:content-atom comp))
+                             :theme (theme/get-markdown-theme thm)
+                             :default-style (fn [s] (theme/fg thm :custom-message-text s))
+                             :padding-x 0)]
+          [(text/make-text (collapsed-line thm name) 0 0)])]
+    ;; replace (not clear+add): the dropped children are disposed, so their
+    ;; track! watches do not outlive them (zombie watchers, tui.md §5.1)
+    (container/container-replace-children! container children)))
 
 (defn- apply-theme!
   "Apply THEME to the derived structures (box background + rebuilt children).

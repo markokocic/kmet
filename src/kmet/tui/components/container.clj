@@ -23,4 +23,19 @@
   "Replace all children at once (used for ordered insertion)."
   [c children]
   (reset! (:children c) (vec children)))
+
+(defn container-replace-children!
+  "Replace all children, disposing the ones dropped (children-first
+   lifecycle, tui.md §5.1) — a child removed from a container without
+   disposal keeps its track! watches alive forever (zombie watchers). Use
+   when the previous children are discarded for good; use
+   container-set-children! when they are being moved or reused."
+  [c children]
+  (let [children (vec children)
+        dropped (remove (fn [old] (some #(identical? % old) children))
+                        @(:children c))]
+    (reset! (:children c) children)
+    (doseq [old dropped]
+      (protocols/dispose old))))
+
 (defn container-clear [c] (reset! (:children c) []))

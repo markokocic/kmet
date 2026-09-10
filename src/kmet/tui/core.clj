@@ -2132,6 +2132,8 @@
 (def container-add-child container/container-add-child)
 (def container-remove-child container/container-remove-child)
 (def container-clear container/container-clear)
+(def container-set-children! container/container-set-children!)
+(def container-replace-children! container/container-replace-children!)
 (def make-box box/make-box)
 (def box-add-child box/box-add-child)
 (def box-remove-child box/box-remove-child)
