@@ -176,15 +176,21 @@ extensions never add host elements. Tags and props:
 `{:text "hi"}` merged over defaults.
 
 **Stateful leaves** (`:input` `:select-list` `:settings-list` `:editor`
-`:spinner` `:cancellable-loader` `:expandable-text`): their props are
-create-time — while the props map stays `=`-equal the instance (and its
-state) is kept, but a CHANGED prop rebuilds the component fresh. Live
-updates go through `:ref` plus the component's setters (e.g.
-`(input/input-set-value! (deref r) "x")`), the same contract the
-spliced-record pattern always used. Focus is a host concern — mount the
-component, then `tui-set-focus` on the ref'd instance. A *planned* apply
-path (§14 R1) would instead let a prop change patch the live instance,
-making the stateful tags usable declaratively.
+`:spinner` `:cancellable-loader` `:expandable-text`): while their props
+stay `=`-equal the instance (and its state) is kept. A CHANGED prop takes
+the tag's **apply path** (§2.3) — every stateful tag declares one, so the
+live instance is patched through its setters instead of rebuilt: text,
+cursor, selection, focus, undo history, the spinner's animation clock and
+a loader's abort signal all survive a prop change. What declines the patch
+(and rebuilds, as the pre-R1 code always did) is a prop the tag cannot
+express on the live instance — an editor's `:border`/`:keybindings`, a
+settings list's `:enable-search`, a spinner's `:frames`/`:interval-ms`
+(the only setter, `set-indicator!`, would switch it to verbatim
+rendering), a cancellable-loader's `:spinner` child (a swap, with nothing
+owning the replacement). Live updates can still go through `:ref` plus the
+component's setters (e.g. `(input/input-set-value! (deref r) "x")`), the
+same contract the spliced-record pattern always used. Focus is a host
+concern — mount the component, then `tui-set-focus` on the ref'd instance.
 
 **Host-internal components without a tag**: `alt_screen_flash` — it needs
 the TUI's own request-render callback (`kmet.tui.core/tui-flash!` owns its
@@ -216,9 +222,28 @@ Ownership rides the `:dsl/meta` stamp: everything the DSL constructs carries
 it; foreign records spliced into trees never do and are never disposed.
 Display leaves (Text/Markdown/Spacer/string) with changed props are rebuilt
 rather than mutated — identity-free, their caches absorb rendering;
-containers and fn components keep identity across passes. One mechanism
-fills everything: containers are constructed empty and filled by the same
-keyed diff through per-tag children lenses.
+containers and fn components keep identity across passes (a container's
+structural props are still create-time — the apply path below is their
+future migration vehicle). A stateful host tag with an `:apply` in its
+tag-table spec takes a third path: the changed props are patched onto the
+live instance (setter calls, `bump! :applies` — §11's counters) and the
+instance is kept; only a falsy return rebuilds. Two rules govern the
+patch. First, the tag's STRUCTURAL props (§2.2 lists which) are checked
+in their constructed form — a nil prop and its default are the same
+component — and decline the patch when they differ. Second, a
+STATE-CARRYING prop (`:value`, `:text`, `:items`, `:expanded?`) is written
+through only when it changed from the previous pass's props AND differs
+from the live value, coerced the way construction coerces it (nil ⇒ the
+default); an unchanged prop never overwrites live state, so a keystroke or
+a ref-driven toggle survives an unrelated prop change, while a prop that
+did change wins. An `:items` change is a REFRESH of the same list, not a
+wholesale replacement: the typed filter/query and the selection position
+survive it (the resetting `select-list-set-items!` /
+`settings-list-set-items!` default is the imperative variant, for a
+genuinely new list). The stamp's recorded props are re-pointed at the
+applied map, so the next equal pass is the plain reuse fast path again.
+One mechanism fills everything: containers are constructed empty and
+filled by the same keyed diff through per-tag children lenses.
 
 **Duplicate `:key`s throw at reconcile** — two spliced siblings sharing a
 key makes reuse undefined; throwing beats a silently vanishing subtree.
@@ -394,10 +419,29 @@ routes its reads via `track!`. Plain `clojure.lang.Atom`s ARE the tracked
 inputs — plain atoms need no wrapper, so there is no `ratom` sugar.
 
 API: `make-reaction` / `reaction` (macro) / `derive` (derived ref over
-explicit deps) / `cursor`, `watch-ref` / `unwatch-ref` (reactions aren't
-IRefs — core `add-watch` cannot take them), `add-on-dispose!`, `flush!`
-(drain the batch queue), `force-run!`, `invalidate!`, `dispose!`,
-`tracked-deref`, `changed?`.
+explicit deps) / `cursor` (read-only lens) / `writable-cursor` +
+`writable-cursor?` + `cursor-reset!` / `cursor-swap!` (write-through lens) /
+`watch-ref` / `unwatch-ref` (reactions aren't IRefs — core `add-watch`
+cannot take them) / `add-on-dispose!` / `flush!` (drain the batch queue) /
+`force-run!` / `invalidate!` / `dispose!` / `tracked-deref` / `changed?`.
+
+**Two cursors, split by capability.** `cursor` derives: reads are
+`(get-in @source path)`, tracked like any dep, and a subscriber that only
+reads cannot write. `writable-cursor` is its read-write sibling for state
+the UI EDITS (a setting, a filter, a draft field): same tracked read, plus
+`cursor-reset!` / `cursor-swap!`, which write the value back into the
+source (`assoc-in` at the path; `[]` replaces the whole value) and return
+it — a two-way binding is `@cur` plus a setter call, no setter callback
+threaded through props. Writes are `=`-gated (an equal value touches
+neither the source nor its watchers — the differing check that keeps an
+`on-change` → write-back → re-render cycle from looping); otherwise a
+write is an ordinary source change, so queued invalidation, `watch-ref`
+watchers and the `:auto-run?` callback all flow normally. The source is a
+plain atom (or another writable cursor, nesting the lens). Create one
+once per owner and dispose it with the owner: a disposed cursor is inert
+(derefs answer nil, writes are ignored) rather than a zombie writer into a
+live source — and the refusal propagates, so writing through a nested lens
+whose ancestor was disposed returns nil instead of claiming success.
 
 Scheduling: a reaction whose deps change (by `=`) is marked dirty and
 **enqueued**; `flush!` runs each dirty reaction once per pass — drained
@@ -503,6 +547,17 @@ by a compute replaces all find-component-and-poke-its-setter plumbing:
 (swap! messages-atom assoc-in [idx :content] new-text)
 
 ;; view: the message component subscribes to its slice (§3.3 pattern)
+```
+
+Where the UI *edits* the global state, the write half is a writable
+cursor (§3.1) — the same pure-data story with a setter instead of a
+`swap!` at the call site:
+
+```clojure
+(def transport (reakt/writable-cursor cfg [:http-transport]))
+
+@transport                                   ;; tracked read
+(reakt/cursor-reset! transport :babashka)    ;; write back, =-gated
 ```
 
 **Hot-path carve-out**: the transcript is NOT a fn component re-deriving
@@ -828,7 +883,7 @@ Under `--debug`, hiccup exposes process-wide counters:
 ```clojure
 (hiccup/counters)
 ;; {:bodies-run 2 :bodies-skipped 37 :constructs 0 :reuses 5
-;;  :disposals 0 :computes 4}
+;;  :applies 1 :disposals 0 :computes 4}
 (hiccup/reset-counters!)   ;; back to zero (tests)
 ```
 
@@ -836,7 +891,9 @@ Reading them: `bodies-run` climbing on frames where nothing the body derefs
 changed means either an inline-callback trap (fresh fn literals in props,
 §2.5) or broken equality; `computes` climbing frame over frame means a
 compute created bare inside a render body instead of under `with-let`
-(§3.3).
+(§3.3); `applies` (the apply-path count, §2.3) climbing every frame on a
+stateful tag whose props never settle means fresh fn literals in its props
+— the tag is patching rather than reusing.
 
 ### Frame dumps & full-redraw reasons (env flags)
 
@@ -928,6 +985,8 @@ ones are postponed below.
 | R5 | border sets as data | `kmet.tui.border` (§2.8) — `:border` on `:dynamic-border`, `:markdown` (table glyphs), `:editor`; `make-bash-execution :border` |
 | R6 | `^{:key}` metadata | keys read from element metadata as well as the `:key` prop (§2.1) |
 | R3a | key labels | `keys/key-label` + `keybindings/key-label-text` (§7.1) — hints and the tree help render `pgup`/`↑`, replacing the private `prettify-keys` regex pass |
+| R1 | prop→state apply path | a `:apply (fn [comp prev-props props])` spec on the tag table + the apply branch in `reuse-or-build` (§2.3): all seven stateful tags patch the live instance on a changed prop (state and focus survive) and decline to rebuild only when the tag cannot express the prop (`:border`/`:keybindings`, `:enable-search`, `:frames`/`:interval-ms`, a loader's `:spinner` child); state-carrying props are written only when THAT prop changed (live edits survive unrelated changes) and coerce like construction (nil ⇒ default); new `select-list`/`settings-list` setters (`-set-height!`, `-set-on-select!`, `-set-items!`, …) back the patch paths, and `cancellable-loader`'s protocol dispose now stops its spinner (pi: dispose → stop). Container structural props stay create-time — the apply path is their future migration vehicle |
+| R2 | writable cursor | `kmet.libs.reakt/writable-cursor` + `cursor-reset!`/`cursor-swap!` (§3.1): a tracked-read lens that writes back through its source with `assoc-in`, `=`-gated, nested lenses composing, inert once disposed; read-only `cursor` stays the derivation primitive |
 | P1 | skill invocation message | `kmet.app.skills/parse-skill-block` (the inverse of the expander) + `kmet.app.ui.skill-message` — a `/skill:name` block renders as a collapsible `[skill] name (ctrl+o to expand)` message instead of dumping its body into the transcript |
 | P2 | images in chat (TUI half) | `kmet.app.ui.image_block` + the live `ui.subs/image-settings-sub`: tool-result and user/custom-message images render inline, or as the `imageFallback` text indicator when `:show-images` is off / the terminal lacks support; `:terminal {:show-images :image-width-cells}` in `config.clj` + terminal-support-gated `/settings` rows. The wire half landed separately: `images.blockImages` = `app/loop.clj` (`convertToLlmWithBlockImages`) + an ungated `/settings` row; `images.autoResize` stays provider work (tracked in `alignment.md` §2) |
 
@@ -935,8 +994,6 @@ ones are postponed below.
 
 | # | borrow | kmet pain point | lands in | size |
 |---|---|---|---|---|
-| R1 | prop→state apply path | stateful-leaf props are create-time → a changed prop rebuilds and drops state | `hiccup.clj` tag table + `reuse-or-build` | medium |
-| R2 | writable cursor | `reakt/cursor` is read-only; two-way binding needs an atom + setter callback | `kmet.libs.reakt` | small |
 | R3b | focus-derived help line | nothing shows what the focused component answers to; hint lines are hand-written per dialog | a help-line component + where per-component declarations live | small |
 | R7 | declarative `:overlay` | dialogs are shown imperatively; declaration site ≠ owner | `hiccup.clj` + `tui.core` | large (spike) |
 
@@ -951,61 +1008,6 @@ analysis is not redone — revisit only on a concrete user request.
 | LaTeX rendering | `tui/src/latex.ts` | same shape of work as Mermaid, smaller audience |
 | Alt-screen search | `alt-screen-search.ts` | needs a fullscreen/alt-screen mode (below) and the transcript model here is the native scrollback, not an owned viewport |
 | Fullscreen (alt-screen) TUI mode | `--tui-mode` | the opposite of the deliberate inline model (§1: transcript in the native scrollback, `\u001b[3J`-based full redraws); an alt-screen mode would fork the renderer, the scroll model and every overlay/scroll assumption |
-
-### R1 — prop→state apply path
-
-**Pain.** Stateful leaves (§2.2) are construct-or-rebuild: `reuse-or-build`
-keeps a matched non-container leaf only while its props stay `=`; a changed
-prop retires the instance and constructs a fresh one — which is where the
-input's `value-atom`/cursor, the editor's undo stack and the list's
-selection are lost. That is why production code never uses the stateful
-tags: dialogs and screens build `make-select-list` / `make-editor` / … and
-drive them through `:ref` + setters, and no tree in `src/` contains an
-`[:input …]` / `[:editor …]` / `[:select-list …]` element (the tags are
-exercised by tests only). The hiccup docstring already names the target:
-container structural props (`:padding-x`, `:gap`) are create-time too,
-pending a props/state migration.
-
-**Borrow.** glimmer-tui's `widget/apply-props!` plus per-tag
-`:init-state`/`:sync-state`: on re-render a prop only overwrites widget
-state when it differs from what the widget already holds. Their rationale
-is exactly kmet's failure mode — without the differing check, the
-`:on-change` → `swap!` → re-render cycle writes the edit buffer back over
-itself and parks the caret at the end on every keystroke.
-
-**Proposal.** An optional `:apply` fn in the tag spec
-(`(fn [comp props] …)`, name open) that `reuse-or-build` calls on a matched
-leaf whose props changed — patch and keep the instance instead of
-retire + construct. The components' existing setters are already
-equality-gated, so no new protocol is needed; the tag table declares which
-tags are patchable and how. The same path is the vehicle for the
-props/state migration (making container structural props live).
-
-**Watch out.** `reuse-or-build`'s rebuild branch is order-sensitive
-(retire first, so the old stamp's ref handle cannot wipe the fresh
-construction's) — the apply branch must fill/remember refs symmetrically
-with both existing branches. Tests pin rebuild-on-prop-change for display
-leaves; those stay valid (display leaves remain identity-free rebuilds),
-but expectations for the stateful tags change.
-
-### R2 — writable cursor
-
-**Pain.** `reakt/cursor` is a derived, read-only reaction (`get-in` over a
-tracked source); a two-way binding today means carrying an atom *plus* a
-setter callback through props.
-
-**Borrow.** `glimmer.ratom/cursor` is a lens: reads are
-`(get-in @src path)`; `reset!`/`swap!` write back through `assoc-in` and
-fire the cursor's own watchers.
-
-**Proposal.** A writable cursor variant (or a `:write-back` option on
-`make-reaction`) whose setter `swap!`s the source with `assoc-in`, reusing
-the tracked-deref/`watch-ref` plumbing so normal queued invalidation flows.
-Keep the read-only cursor for pure derivation — a subscriber that only
-reads must not be able to write.
-
-**Pairs with R1:** `[:settings-row {:value (reakt/cursor cfg [:http-transport])}]`
-is the natural call site, but either is independently useful.
 
 ### R7 — declarative `:overlay` (spike)
 
@@ -1064,8 +1066,7 @@ Recorded so the analysis is not redone:
 
 ### Suggested order
 
-R1 + R2 together: R2 gives R1 its natural call site, and R1 is the
-props/state migration → R7 as a spike, once the tag-table extension path
-has been used once (R5, R6, R3a, R4, P1 and P2 have exercised it). R3b
-waits on the declarations decision.
+R7 as a spike, now that the tag-table extension path has been exercised
+several times (R5, R6, R3a, R4, P1, P2, R1, R2). R3b waits on the
+declarations decision.
 

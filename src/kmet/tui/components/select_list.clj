@@ -285,6 +285,15 @@
 
 ;; ─── Construction ──────────────────────────────────────────────────────────
 
+(defn- column-bounds
+  "pi: getPrimaryColumnBounds — a single provided bound applies to both
+   sides (min ?? max ?? 32); neither defaults to 32."
+  [min-primary-column-width max-primary-column-width]
+  [(or min-primary-column-width max-primary-column-width
+       DEFAULT-PRIMARY-COLUMN-WIDTH)
+   (or max-primary-column-width min-primary-column-width
+       DEFAULT-PRIMARY-COLUMN-WIDTH)])
+
 (defn make-select-list
   "Create a new SelectList component.
    Items are maps with :label, optional :value and :description.
@@ -313,14 +322,8 @@
                    on-key on-select on-escape on-selection-change]
             :or {height 10 theme default-theme
                  no-match-text "  No matching commands"}}]
-  ;; pi: getPrimaryColumnBounds — a single provided bound applies to both
-  ;; sides (min ?? max ?? 32); neither defaults to 32
-  (let [min-w (or min-primary-column-width
-                  max-primary-column-width
-                  DEFAULT-PRIMARY-COLUMN-WIDTH)
-        max-w (or max-primary-column-width
-                  min-primary-column-width
-                  DEFAULT-PRIMARY-COLUMN-WIDTH)]
+  (let [[min-w max-w] (column-bounds min-primary-column-width
+                                     max-primary-column-width)]
     (map->SelectList {:items-atom (atom items)
                       :selected-idx-atom (atom 0)
                       :filter-atom (atom "")
@@ -345,10 +348,19 @@
   [sl header]
   (reset! (:header-atom sl) header))
 
-(defn select-list-set-items! [sl items]
-  (reset! (:items-atom sl) items)
-  (reset! (:selected-idx-atom sl) 0)
-  (reset! (:filter-atom sl) ""))
+(defn select-list-set-items!
+  "Replace the item list. By default the selection and the filter text are
+   reset too — a wholesale replacement is a new question. Pass
+   :preserve-state? true to keep them, the declarative :items patch path:
+   there an items change is a refresh of the SAME question, so it must not
+   eat the user's typed filter (a selection left out of range is clamped by
+   render)."
+  ([sl items] (select-list-set-items! sl items nil))
+  ([sl items {:keys [preserve-state?]}]
+   (reset! (:items-atom sl) items)
+   (when-not preserve-state?
+     (reset! (:selected-idx-atom sl) 0)
+     (reset! (:filter-atom sl) ""))))
 
 (defn select-list-set-selected!
   "Move the selection to IDX, clamped to the current item count."
@@ -376,11 +388,36 @@
 (defn select-list-set-theme! [sl theme]
   (reset! (:theme-atom sl) theme))
 
+(defn select-list-set-height! [sl height]
+  (reset! (:height-atom sl) height))
+
+(defn select-list-set-no-match-text! [sl text]
+  (reset! (:no-match-text-atom sl) text))
+
+(defn select-list-set-column-bounds!
+  "Set the description column bounds from the optional min/max primary
+   column widths (the same single-bound-applies-to-both defaulting as
+   make-select-list)."
+  [sl min-primary-column-width max-primary-column-width]
+  (let [[min-w max-w] (column-bounds min-primary-column-width
+                                     max-primary-column-width)]
+    (reset! (:min-primary-column-atom sl) min-w)
+    (reset! (:max-primary-column-atom sl) max-w)))
+
 (defn select-list-set-truncate-primary! [sl f]
   (reset! (:truncate-primary-atom sl) f))
 
+(defn select-list-set-on-select! [sl f]
+  (reset! (:on-select sl) f))
+
+(defn select-list-set-on-escape! [sl f]
+  (reset! (:on-escape sl) f))
+
 (defn select-list-set-on-selection-change! [sl f]
   (reset! (:on-selection-change sl) f))
+
+(defn select-list-set-on-key! [sl f]
+  (reset! (:on-key sl) f))
 
 ;; ─── IFocusable ─────────────────────────────────────────────────────────────
 

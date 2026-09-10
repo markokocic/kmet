@@ -38,7 +38,12 @@
    value caching, last-watcher auto-dispose for manual reactions, and force-run!
    flushing the queue first. One deliberate deviation from current Reagent:
    plain reactions re-run QUEUED at the frame tick, not synchronously in the
-   watch handler — coalescing matters at streaming write rates."
+   watch handler — coalescing matters at streaming write rates.
+
+   Writable cursors (writable-cursor) are read-only cursors plus a write
+   path: reads track exactly like a cursor's, cursor-reset!/cursor-swap!
+   write back through the source (=-gated, nested lenses composing), and a
+   disposed lens refuses writes instead of writing back from the dead."
   (:refer-clojure :exclude [derive]))
 
 ;; ═══════════════════════════════════════════════════════════════════════════
@@ -562,3 +567,155 @@
      (make-reaction #(get-in (tracked-deref source) path))))
   ([source k & ks]
    (cursor source (cons k ks))))
+
+;; ═══════════════════════════════════════════════════════════════════════════
+;; Writable cursors — the lens's write half
+;; ═══════════════════════════════════════════════════════════════════════════
+
+(defprotocol IWritableCursor
+  "Internal surface of writable cursors (see writable-cursor). Not for
+   external use — go through cursor-reset!/cursor-swap!."
+  (-cursor-set
+    [this v]
+    "Write V through to the source at this cursor's path. V on success (an
+     already-equal value lands trivially); nil when the write could not
+     land — this cursor, or a lens it writes through, is disposed.")
+  (-cursor-apply
+    [this f args]
+    "Apply F to the current value and write the result back. The new value,
+     or nil when the write could not land (see -cursor-set)."))
+
+(defn writable-cursor?
+  "True for refs created by writable-cursor — the write-capable lens over a
+   source ref. Plain atoms, read-only cursors and reactions answer false."
+  [ref]
+  (satisfies? IWritableCursor ref))
+
+(defn- write-through!
+  "The lens's write half: put V into SOURCE at PATH, returning V when the
+   value landed, nil when the write was refused. PATH is already normalized;
+   empty means replace the whole value (assoc-in would assoc a nil key
+   instead). SOURCE is a plain ref (swap! + assoc-in) or another writable
+   cursor — written through its own setter, so nested lenses compose and a
+   refusal anywhere up the chain (a disposed lens) propagates as nil."
+  [source path v]
+  (if (writable-cursor? source)
+    (-cursor-set source (if (seq path) (assoc-in @source path v) v))
+    (do (swap! source (fn [m] (if (seq path) (assoc-in m path v) v)))
+        v)))
+
+(defn- disposed-lens?
+  "True when a cursor's inner reaction has been disposed. Such a cursor is
+   inert: its `=`-gate can no longer read (deref answers nil), so writes
+   must not sneak through it — a zombie write-back into a live source is
+   exactly what disposal is supposed to end."
+  [rx]
+  (= :disposed (:state (reaction-state rx))))
+
+(defn writable-cursor
+  "A writable cursor (lens) over SOURCE at PATH — the read-write sibling of
+   cursor. Reads are (get-in @source path), tracked exactly like a cursor's,
+   so reactions reading it track the source; cursor-reset!/cursor-swap!
+   write back through the source with assoc-in and return the new value, so
+   a two-way binding is just @cur plus a setter call — no separate setter
+   callback threaded through props.
+
+   Writes are =-gated: an equal value touches neither the source nor its
+   watchers (the differing check that keeps an on-change → write-back →
+   re-render cycle from looping). Otherwise a write is an ordinary source
+   change: the queued invalidation, watch-ref watchers and the :auto-run?
+   callback all flow normally through the lens's reaction.
+
+   Keep writable cursors for state the UI EDITS (a setting, a filter, a
+   draft field); read-only derivation stays on cursor, whose subscribers
+   cannot write. SOURCE is a plain atom (or another writable cursor, for a
+   nested path); unlike the read-only cursor, a reaction cannot be a
+   source — there is no write-back path — and that throws at construction.
+   PATH is a seq or varargs keys, [] for the whole value.
+   Create one ONCE per owner (a bare cursor built inside a re-running body
+   leaks a reaction per pass, like any reaction), and dispose it when the
+   owner goes away: a disposed cursor is inert — derefs answer nil and
+   writes are ignored (nil), so nothing writes back through a dead lens.
+   The cursor delegates its watch/dispose surface to that inner reaction:
+   `watch-ref`, `add-on-dispose!`, `force-run!` and `dispose!` all reach it
+   (so `add-on-dispose!` disposers receive the inner reaction). A cursor
+   may be sourced from another writable cursor (a nested lens); a refusal
+   anywhere up that chain — some ancestor disposed — refuses the write
+   rather than writing through a dead lens."
+  ([source path]
+   (let [path (if (sequential? path) path [path])
+         _ (when-not (or (writable-cursor? source)
+                         (instance? clojure.lang.IAtom source))
+             (throw (ex-info
+                     (str "kmet.libs.reakt/writable-cursor: source must be "
+                          "a plain atom or another writable cursor — "
+                          (pr-str (class source))
+                          " has no write-back path (a read-only cursor "
+                          "and a reaction are read-only)")
+                     {:source source})))
+         rx (make-reaction #(get-in (tracked-deref source) path))
+         self (atom nil)
+         cur (reify
+               IWritableCursor
+               (-cursor-set [_ v]
+                 (when-not (disposed-lens? rx)
+                   (if (changed? @rx v)
+                     (write-through! source path v)
+                     v)))
+               (-cursor-apply [_ f args]
+                 (when-not (disposed-lens? rx)
+                   (let [current @rx
+                         v (apply f current args)]
+                     (if (changed? current v)
+                       (write-through! source path v)
+                       v))))
+               RXRef
+               (-add-watch [_ key f] (-add-watch rx key f))
+               (-remove-watch [_ key] (-remove-watch rx key))
+               (-cell [_] (-cell rx))
+               (-dispose [_] (-dispose rx))
+               (-force-run [_] (-force-run rx))
+               clojure.lang.IDeref
+               (deref [_]
+                 ;; Record the cursor (not only its inner reaction) as the
+                 ;; enclosing reaction's dependency — the same contract
+                 ;; reactions carry (see the RXRef docstring).
+                 (record-dep! @self)
+                 (deref rx)))]
+     (reset! self cur)
+     cur))
+  ([source k & ks]
+   (writable-cursor source (cons k ks))))
+
+(defn- not-writable! [fname ref]
+  (throw (ex-info
+          (str "kmet.libs.reakt/" fname ": not a writable cursor — make one "
+               "over the source with kmet.libs.reakt/writable-cursor "
+               "(a read-only cursor has no path to write back to, and a "
+               "plain atom is written with swap!/reset! directly)")
+          {:ref ref})))
+
+(defn cursor-reset!
+  "Write V through writable cursor CUR into its source (assoc-in at CUR's
+   path) and return V. =-gated: an equal value touches neither the source
+   nor its watchers. Nil when the write could not land — CUR, or a lens it
+   writes through, is disposed (a nil V that DID land is also nil; the
+   refusal is for writes that stay out of the source). Throws when CUR is
+   not a writable cursor."
+  [cur v]
+  (if (writable-cursor? cur)
+    (-cursor-set cur v)
+    (not-writable! "cursor-reset!" cur)))
+
+(defn cursor-swap!
+  "Apply F to CUR's current value plus ARGS and write the result back
+   through the source (=-gated), returning the new value — the writable
+   cursor's swap!. F's argument is the value read at call time (read and
+   write are two steps; the write itself is a swap! on the source), so a
+   concurrent writer of the same slice is last-write-wins, as with any
+   read-then-swap. Nil when the write could not land — CUR, or a lens it
+   writes through, is disposed. Throws when CUR is not a writable cursor."
+  [cur f & args]
+  (if (writable-cursor? cur)
+    (-cursor-apply cur f args)
+    (not-writable! "cursor-swap!" cur)))

@@ -1,6 +1,7 @@
 (ns kmet.tui.components.test-cancellable-loader
   (:require [clojure.test :as t]
             [kmet.tui.core :as core]
+            [kmet.tui.protocols :as protocols]
             [kmet.tui.components.spinner :as spinner]
             [kmet.tui.components.cancellable-loader :as cl]))
 
@@ -51,4 +52,13 @@
   (let [loader (make-loader)]
     (t/is (spinner/spinner-active? (:spinner loader)))
     (cl/cancellable-loader-dispose! loader)
+    (t/is (not (spinner/spinner-active? (:spinner loader))))))
+
+(t/deftest test-protocol-dispose-stops-spinner
+  ;; the reconciler disposes a dropped loader through the protocol — that
+  ;; path must stop the spinner too (pi: CancellableLoader.dispose →
+  ;; Loader.stop), or a rebuilt loader leaves the old one ticking
+  (let [loader (make-loader)]
+    (t/is (spinner/spinner-active? (:spinner loader)))
+    (protocols/dispose loader)
     (t/is (not (spinner/spinner-active? (:spinner loader))))))

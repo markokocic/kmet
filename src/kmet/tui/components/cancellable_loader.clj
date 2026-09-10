@@ -23,7 +23,14 @@
         (f)))
     nil)
   (invalidate [this]
-    (protocols/invalidate (:spinner this))))
+    (protocols/invalidate (:spinner this)))
+  (dispose [this]
+    ;; pi: CancellableLoader.dispose → Loader.stop — a dropped loader (a
+    ;; rebuild after a prop change, a dialog close) must not leave its
+    ;; spinner ticking. The public cancellable-loader-dispose! is the same
+    ;; call; this wires it into the component protocol so the reconciler's
+    ;; disposal reaches it too.
+    (spinner/spinner-stop! (:spinner this))))
 
 ;; ─── Construction & API ────────────────────────────────────────────────────
 

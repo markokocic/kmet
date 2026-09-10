@@ -246,6 +246,33 @@
 (defn settings-list-set-on-escape! [sl f]
   (reset! (:on-escape-atom sl) f))
 
+(defn settings-list-set-items!
+  "Replace the item list. By default the search state is reset with it
+   (query cleared in the search box and the filter atom, selection back to
+   the first row) — a wholesale replacement is a new question. Pass
+   :preserve-state? true to keep the current query and selection, the
+   declarative :items patch path: an items refresh must not eat the user's
+   query (a selection left out of range is clamped by render)."
+  ([sl items] (settings-list-set-items! sl items nil))
+  ([sl items {:keys [preserve-state?]}]
+   (reset! (:items-atom sl) items)
+   (when-not preserve-state?
+     (reset! (:selected-idx-atom sl) 0)
+     (reset! (:filter-atom sl) "")
+     ;; the search box text is the visible half of the query — clearing
+     ;; only the filter atom would show a query the list no longer applies
+     (when-let [si @(:search-input-atom sl)]
+       (input/input-set-value! si "")))))
+
+(defn settings-list-set-theme! [sl theme]
+  (reset! (:theme-atom sl) theme))
+
+(defn settings-list-set-on-change! [sl f]
+  (reset! (:on-change-atom sl) f))
+
+(defn settings-list-set-max-visible! [sl n]
+  (reset! (:max-visible sl) n))
+
 ;; ─── Public helpers ─────────────────────────────────────────────────────────
 
 (defn settings-list-get-item [sl id]

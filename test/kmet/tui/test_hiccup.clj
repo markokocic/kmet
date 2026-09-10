@@ -8,7 +8,13 @@
    memoization/idle invariant."
   (:require [clojure.string :as str]
             [clojure.test :as t]
+            [kmet.tui.components.cancellable-loader :as cancellable-loader]
+            [kmet.tui.components.editor :as editor]
+            [kmet.tui.components.expandable-text :as expandable-text]
             [kmet.tui.components.input :as input]
+            [kmet.tui.components.select-list :as select-list]
+            [kmet.tui.components.spinner :as spinner]
+            [kmet.tui.components.settings-list :as settings-list]
             [kmet.tui.components.text :as text]
             [kmet.tui.core :as core]
             [kmet.tui.hiccup :as h]
@@ -238,8 +244,8 @@
     (t/is (str/includes? (last lines) "Work"))))
 
 (t/deftest input-tag
-  ;; :value pre-fills; :on-submit is wired; live updates go through
-  ;; :ref + the setter (the create-time props contract)
+  ;; :value pre-fills; :on-submit is wired; props are live (the apply path,
+  ;; tui.md §2.2) and the :ref + setter path stays valid
   (let [r (h/ref)
         submitted (atom nil)
         on-submit (fn [v] (reset! submitted v))
@@ -332,6 +338,351 @@
       (t/is (some? first))
       (core/render r2 20)
       (t/is (identical? first (deref r)) "same props → same instance"))))
+
+;; ═══════════════════════════════════════════════════════════════════════
+;; R1 — prop→state apply path (tui.md §2.2–§2.3)
+;; ═══════════════════════════════════════════════════════════════════════
+
+(t/deftest stateful-tag-props-patch-in-place
+  ;; a changed prop on an :apply tag patches the live instance — identity,
+  ;; state and focus survive; only a prop the tag cannot express rebuilds
+  (let [iref (h/ref)
+        v (atom "a")
+        root (h/root (fn [_] [:input {:ref iref :value (rag/tracked-deref v)}]))]
+    (core/render root 40)
+    (let [i1 (deref iref)]
+      (h/reset-counters!)
+      (reset! v "ab")
+      (core/render root 40)
+      (t/is (identical? i1 (deref iref)) "live prop change patches, no rebuild")
+      (t/is (= "ab" (input/input-get-value (deref iref))))
+      (t/is (= 1 (:applies (h/counters))))
+      (t/is (zero? (:constructs (h/counters))) "no fresh construction")
+      ;; the patched instance remembers the new props — an equal pass is
+      ;; the plain reuse fast path again
+      (core/render root 40)
+      (t/is (identical? i1 (deref iref)))
+      (t/is (= 1 (:applies (h/counters))) "no re-apply on unchanged props"))))
+
+(t/deftest input-tag-uncontrolled-text-survives-prop-change
+  ;; an absent :value prop is not a write — typed text survives an
+  ;; unrelated prop change (the construct-equivalent patch contract)
+  (let [iref (h/ref)
+        submit (atom (fn [_]))
+        root (h/root (fn [_] [:input {:ref iref
+                                      :on-submit (rag/tracked-deref submit)}]))]
+    (core/render root 40)
+    (let [i1 (deref iref)]
+      (protocols/handle-input i1 "hi")
+      (reset! submit (fn [_] :other))
+      (core/render root 40)
+      (t/is (identical? i1 (deref iref)))
+      (t/is (= "hi" (input/input-get-value (deref iref)))
+            "no :value prop → nothing is written over the typed text"))))
+
+(t/deftest input-tag-unchanged-value-never-clobbers-typing
+  ;; the write gate on :value is the PROP change, not the props-map change:
+  ;; a static :value plus typing survives an unrelated prop change, while a
+  ;; real :value change is an instruction and wins (nil ⇒ the construct
+  ;; default, an empty input)
+  (let [iref (h/ref)
+        v (atom "abc")
+        submit (atom (fn [_]))
+        root (h/root (fn [_] [:input {:ref iref
+                                      :value (rag/tracked-deref v)
+                                      :on-submit (rag/tracked-deref submit)}]))]
+    (core/render root 40)
+    (let [i1 (deref iref)]
+      (protocols/handle-input i1 "d")
+      (t/is (= "dabc" (input/input-get-value i1)) "typed at the cursor")
+      (reset! submit (fn [_] :other))
+      (core/render root 40)
+      (t/is (= "dabc" (input/input-get-value i1))
+            ":value unchanged from the previous pass → no write")
+      (reset! v "xyz")
+      (core/render root 40)
+      (t/is (= "xyz" (input/input-get-value i1))
+            "a changed :value prop patches the live instance")
+      (reset! v nil)
+      (core/render root 40)
+      (t/is (= "" (input/input-get-value i1))
+            "nil ⇒ the construct default, like make-input with no value"))))
+
+(t/deftest editor-tag-unchanged-text-never-clobbers-typing
+  ;; the same gate on :text: an unrelated prop change (:height) patches the
+  ;; live editor without resetting what the user typed
+  (let [eref (h/ref)
+        h (atom 3)
+        root (h/root (fn [_] [:editor {:ref eref
+                                       :text "draft"
+                                       :height (rag/tracked-deref h)}]))]
+    (core/render root 40)
+    (let [e1 (deref eref)]
+      (protocols/handle-input e1 "X")
+      (t/is (= "draftX" (editor/editor-get-text e1)))
+      (reset! h 5)
+      (core/render root 40)
+      (t/is (identical? e1 (deref eref)))
+      (t/is (= "draftX" (editor/editor-get-text e1))
+            "the unchanged :text prop did not clobber live typing")
+      (t/is (= 5 @(:height-atom e1)) "the changed :height prop patched"))))
+
+(t/deftest editor-tag-props-patch-in-place
+  ;; :text patches =-gated; structural props (border/keybindings) have no
+  ;; setters — the apply fn declines and the leaf rebuilds
+  (let [eref (h/ref)
+        draft (atom "x")
+        border (atom :normal)
+        root (h/root (fn [_] [:editor {:ref eref
+                                       :text (rag/tracked-deref draft)
+                                       :border (rag/tracked-deref border)
+                                       :height 3}]))]
+    (core/render root 40)
+    (let [e1 (deref eref)]
+      (reset! draft "xy")
+      (core/render root 40)
+      (t/is (identical? e1 (deref eref)) "text change patches the live editor")
+      (t/is (= "xy" (editor/editor-get-text (deref eref))))
+      (reset! border :ascii)
+      (core/render root 40)
+      (t/is (not (identical? e1 (deref eref)))
+            "a structural prop change rebuilds (apply declined)"))))
+
+(t/deftest select-list-tag-props-patch-in-place
+  ;; items replace without a rebuild; an unrelated prop change must not wipe
+  ;; the typed filter, and an items REFRESH (the declarative patch) keeps
+  ;; the filter and the selection — same question re-asked, not a wholesale
+  ;; replacement (that is select-list-set-items!'s resetting default)
+  (let [sref (h/ref)
+        items (atom [{:label "one"} {:label "two"}])
+        on-esc (atom (fn []))
+        root (h/root (fn [_] [:select-list {:ref sref
+                                            :items (rag/tracked-deref items)
+                                            :on-escape (rag/tracked-deref on-esc)}]))]
+    (core/render root 40)
+    (let [s1 (deref sref)]
+      (protocols/set-focused! s1 true)
+      ;; selection: move to the second row, then refresh the items
+      (protocols/handle-input s1 "\u001b[B")
+      (t/is (= 1 @(:selected-idx-atom s1)))
+      (reset! items [{:label "one"} {:label "two"} {:label "three"}])
+      (core/render root 40)
+      (t/is (identical? s1 (deref sref)) "items change patches, no rebuild")
+      (t/is (= 3 (count @(:items-atom s1))))
+      (t/is (= 1 @(:selected-idx-atom s1))
+            "the selection index survived the refresh")
+      (t/is (= "two" (:label (select-list/select-list-get-selected s1))))
+      ;; filter: type, then an unrelated prop change
+      (protocols/handle-input s1 "t")
+      (t/is (= "t" @(:filter-atom s1)) "typed filter installed")
+      (reset! on-esc (fn [] :new))
+      (core/render root 40)
+      (t/is (identical? s1 (deref sref)))
+      (t/is (= "t" @(:filter-atom s1)) "unrelated prop change kept the filter")
+      (t/is (protocols/focused s1) "focus survives the patch")
+      (t/is (= "two" (:label (select-list/select-list-get-selected s1)))
+            "the typed filter still selects through the patched instance")
+      ;; … and a refresh keeps the typed filter too
+      (reset! items (conj @items {:label "tango"}))
+      (core/render root 40)
+      (t/is (= 4 (count @(:items-atom s1))))
+      (t/is (= "t" @(:filter-atom s1)) "an items refresh kept the typed filter")
+      (t/is (= "two" (:label (select-list/select-list-get-selected s1)))))))
+
+(t/deftest select-list-set-items-default-still-resets
+  ;; the imperative wholesale-replacement default is unchanged: without
+  ;; :preserve-state? the query and selection reset with the new items
+  (let [sl (select-list/make-select-list [{:label "one"} {:label "two"}])]
+    (protocols/handle-input sl "t")
+    (t/is (= "t" @(:filter-atom sl)))
+    (select-list/select-list-set-items! sl [{:label "three"}])
+    (t/is (= "" @(:filter-atom sl)) "the filter reset with the new items")
+    (t/is (zero? @(:selected-idx-atom sl))))
+  ;; …and :preserve-state? keeps the selection position
+  (let [sl (select-list/make-select-list [{:label "one"} {:label "two"}])]
+    (protocols/handle-input sl "\u001b[B")
+    (t/is (= 1 @(:selected-idx-atom sl)))
+    (select-list/select-list-set-items! sl [{:label "a"} {:label "b"} {:label "c"}]
+                                        {:preserve-state? true})
+    (t/is (= 1 @(:selected-idx-atom sl)) "preserve kept the selection")))
+
+(t/deftest settings-list-tag-props-patch-in-place
+  (let [gref (h/ref)
+        rows (atom [{:id :a :label "A" :value true :values [true false]}])
+        search (atom false)
+        root (h/root (fn [_] [:settings-list {:ref gref
+                                              :items (rag/tracked-deref rows)
+                                              :enable-search (rag/tracked-deref search)}]))]
+    (core/render root 40)
+    (let [g1 (deref gref)]
+      (reset! rows [{:id :a :label "A" :value false :values [true false]}])
+      (core/render root 40)
+      (t/is (identical? g1 (deref gref)) "items change patches, no rebuild")
+      (t/is (false? (:value (settings-list/settings-list-get-item (deref gref) :a))))
+      (reset! search true)
+      (core/render root 40)
+      (t/is (not (identical? g1 (deref gref)))
+            "enable-search is construct-time — a change rebuilds"))))
+
+(t/deftest settings-list-items-refresh-keeps-the-search-query
+  ;; an items refresh must not eat the user's query — the search box text
+  ;; and the filter atom both stay (the resetting set-items! default is the
+  ;; wholesale-replacement variant)
+  (let [gref (h/ref)
+        rows (atom [{:id :a :label "Alpha" :value "x" :values ["x" "y"]}
+                    {:id :b :label "Beta" :value "z" :values ["z" "w"]}])
+        root (h/root (fn [_] [:settings-list {:ref gref
+                                              :items (rag/tracked-deref rows)
+                                              :enable-search true}]))]
+    (core/render root 40)
+    (let [g1 (deref gref)]
+      (protocols/handle-input g1 "b")
+      (t/is (= "b" @(:filter-atom g1)) "typed query installed")
+      (reset! rows (conj @rows {:id :c :label "Beta 2" :value "q" :values ["q"]}))
+      (core/render root 40)
+      (t/is (identical? g1 (deref gref)) "items refresh patches, no rebuild")
+      (t/is (= 3 (count @(:items-atom g1))))
+      (t/is (= "b" @(:filter-atom g1)) "an items refresh kept the query")
+      (t/is (= "b" (input/input-get-value @(:search-input-atom g1)))
+            "the search box still shows the query the list applies"))))
+
+(t/deftest settings-list-set-items-default-still-resets
+  ;; the imperative default resets both halves of the query — the filter
+  ;; atom AND the visible search box — so they cannot drift apart
+  (let [sl (settings-list/make-settings-list
+            [{:id :a :label "Alpha" :value "x" :values ["x"]}
+             {:id :b :label "Beta" :value "z" :values ["z"]}]
+            :enable-search true)]
+    (protocols/handle-input sl "b")
+    (settings-list/settings-list-set-items! sl [{:id :c :label "Gamma"
+                                                 :value "q" :values ["q"]}])
+    (t/is (= "" @(:filter-atom sl)))
+    (t/is (= "" (input/input-get-value @(:search-input-atom sl))))
+    (t/is (zero? @(:selected-idx-atom sl)))))
+
+(t/deftest expandable-text-tag-props-patch-in-place
+  (let [col (fn [] "collapsed")
+        exp (fn [] "expanded")
+        xref (h/ref)
+        open? (atom false)
+        root (h/root (fn [_] [:expandable-text {:ref xref
+                                                :collapsed-fn col
+                                                :expanded-fn exp
+                                                :expanded? (rag/tracked-deref open?)}]))]
+    (core/render root 40)
+    (let [x1 (deref xref)]
+      (reset! open? true)
+      (core/render root 40)
+      (t/is (identical? x1 (deref xref)))
+      (t/is (expandable-text/expandable-text-get-expanded (deref xref))))))
+
+(t/deftest expandable-text-unchanged-expanded-never-collapses-live-state
+  ;; the gate on :expanded? is the prop change; a props-map change that
+  ;; leaves it alone (a :padding-x key appearing — equal to its default)
+  ;; neither rebuilds nor collapses a programmatic toggle
+  (let [col (fn [] "collapsed")
+        exp (fn [] "expanded")
+        xref (h/ref)
+        extra (atom nil)
+        root (h/root (fn [_] [:expandable-text
+                              (merge {:ref xref
+                                      :collapsed-fn col
+                                      :expanded-fn exp
+                                      :expanded? false}
+                                     (rag/tracked-deref extra))]))]
+    (core/render root 40)
+    (let [x1 (deref xref)]
+      (expandable-text/expandable-text-set-expanded! x1 true)
+      (reset! extra {:padding-x 0})
+      (core/render root 40)
+      (t/is (identical? x1 (deref xref))
+            "a missing padding key equals its 0 default — no rebuild churn")
+      (t/is (expandable-text/expandable-text-get-expanded (deref xref))
+            "the unchanged :expanded? prop did not collapse the live state"))))
+
+(t/deftest spinner-tag-props-patch-without-restarting-the-animation
+  ;; :text patches in place — a rebuild would restart the animation clock;
+  ;; :active flips start/stop; :frames has no faithful setter (the only one,
+  ;; set-indicator!, switches the spinner to verbatim rendering), so a
+  ;; change there rebuilds
+  (let [sref (h/ref)
+        msg (atom "a")
+        active (atom true)
+        root (h/root (fn [_] [:spinner {:ref sref
+                                        :text (rag/tracked-deref msg)
+                                        :active (rag/tracked-deref active)
+                                        :prefix ""}]))]
+    (core/render root 30)
+    (let [s1 (deref sref)
+          start1 @(:start-atom s1)]
+      (reset! msg "b")
+      (core/render root 30)
+      (t/is (identical? s1 (deref sref)))
+      (t/is (= "b" @(:text-atom (deref sref))))
+      (t/is (identical? start1 @(:start-atom (deref sref)))
+            "the animation clock was not reset")
+      (reset! active false)
+      (core/render root 30)
+      (t/is (identical? s1 (deref sref)))
+      (t/is (false? (spinner/spinner-active? (deref sref))))
+      (reset! active true)
+      (core/render root 30)
+      (t/is (spinner/spinner-active? (deref sref))))))
+
+(t/deftest spinner-tag-frames-change-rebuilds
+  (let [sref (h/ref)
+        frames (atom nil)
+        root (h/root (fn [_] [:spinner {:ref sref :text "x" :active true
+                                        :prefix ""
+                                        :frames (rag/tracked-deref frames)}]))]
+    (core/render root 30)
+    (let [s1 (deref sref)]
+      (reset! frames ["A"])
+      (core/render root 30)
+      (t/is (not (identical? s1 (deref sref)))
+            ":frames cannot be patched faithfully — the leaf rebuilds"))))
+
+(t/deftest cancellable-loader-tag-props-patch-in-place
+  ;; :on-abort patches (the abort signal survives); a changed :spinner child
+  ;; cannot be swapped — it rebuilds (and the retired loader's dispose stops
+  ;; the old spinner, pi: CancellableLoader.dispose → Loader.stop)
+  (let [cref (h/ref)
+        cb (atom (fn []))
+        root (h/root (fn [_] [:cancellable-loader
+                              {:ref cref :text "loading"
+                               :on-abort (rag/tracked-deref cb)}]))]
+    (core/render root 30)
+    (let [c1 (deref cref)]
+      (reset! cb (fn [] :other))
+      (core/render root 30)
+      (t/is (identical? c1 (deref cref)))
+      (t/is (false? (cancellable-loader/cancellable-loader-aborted? (deref cref)))
+            "the abort signal survived the patch")
+      (let [sp (atom (spinner/make-spinner :text "one" :active true))
+            sref (h/ref)
+            lroot (h/root (fn [_] [:cancellable-loader
+                                   {:ref sref
+                                    :spinner (rag/tracked-deref sp)}]))]
+        (core/render lroot 30)
+        (let [c2 (deref sref)
+              old-spinner (:spinner c2)]
+          (reset! sp (spinner/make-spinner :text "two" :active true))
+          (core/render lroot 30)
+          (t/is (not (identical? c2 (deref sref)))
+                "a changed :spinner child rebuilds")
+          (t/is (not (spinner/spinner-active? old-spinner))
+                "the retired loader's dispose stopped the old spinner"))))))
+
+(t/deftest writable-cursor-two-way-binding-through-a-body
+  ;; R1+R2: a writable cursor read through a body re-renders when written
+  ;; through — the write is an ordinary source change
+  (let [cfg (atom {:transport :curl})
+        cur (rag/writable-cursor cfg [:transport])
+        root (h/root (fn [_] [:text {:padding-x 0}
+                              (name (rag/tracked-deref cur))]))]
+    (t/is (str/includes? (str/join "\n" (core/render root 20)) "curl"))
+    (t/is (= :babashka (rag/cursor-reset! cur :babashka)))
+    (t/is (str/includes? (str/join "\n" (core/render root 20)) "babashka"))))
 
 ;; ── root mounting (dsl.md §2.6) ──────────────────────────────────────────
 

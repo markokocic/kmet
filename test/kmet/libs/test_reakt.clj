@@ -48,6 +48,95 @@
       (is (= 5 @cur))
       (is (= 5 @(r/cursor src :a :b)) "varargs keys normalize"))))
 
+(deftest test-writable-cursor
+  (testing "reads the slice; cursor-reset!/cursor-swap! write back through the source"
+    (let [src (atom {:http {:transport :curl :timeout 5}})
+          cur (r/writable-cursor src [:http :transport])]
+      (is (= :curl @cur) "reads are (get-in @source path)")
+      (is (r/writable-cursor? cur))
+      (is (= :babashka (r/cursor-reset! cur :babashka)))
+      (is (= {:http {:transport :babashka :timeout 5}} @src) "assoc-in write-back")
+      (is (= "babashka" (r/cursor-swap! cur name)))
+      (is (= {:http {:transport "babashka" :timeout 5}} @src))
+      (is (= "babashka" @cur) "the cursor sees its own write")))
+  (testing "varargs keys, the whole-value path [], and nested lenses"
+    (let [src (atom {:a {:b 1}})
+          cur (r/writable-cursor src :a :b)]
+      (is (= 1 @cur) "bare-key path form")
+      (r/cursor-reset! cur 2)
+      (is (= {:a {:b 2}} @src)))
+    (let [src (atom {:whole 5})
+          whole (r/writable-cursor src [])]
+      (is (= {:whole 5} @whole))
+      (r/cursor-reset! whole {:x 1})
+      (is (= {:x 1} @src) "[] replaces the value — no nil key from assoc-in"))
+    (let [src (atom {:a {:b 1}})
+          outer (r/writable-cursor src [:a])
+          inner (r/writable-cursor outer [:b])]
+      (is (= 1 @inner))
+      (r/cursor-reset! inner 9)
+      (is (= {:a {:b 9}} @src) "a writable cursor as source nests the write")))
+  (testing "writes are =-gated: an equal value touches neither source nor watchers"
+    (let [src (atom {:n 1})
+          cur (r/writable-cursor src [:n])
+          fired (atom 0)]
+      @cur
+      (r/watch-ref cur :w (fn [& _] (swap! fired inc)))
+      (r/cursor-reset! cur 1)
+      (r/flush!)
+      (is (zero? @fired) "equal write is silent")
+      (is (identical? (:n @src) 1))
+      (r/cursor-reset! cur 2)
+      (r/flush!)
+      (is (= 1 @fired) "a real write notifies once")))
+  (testing "a write is an ordinary source change for readers"
+    (let [src (atom {:n 1})
+          cur (r/writable-cursor src [:n])
+          runs (atom 0)
+          rx (r/make-reaction (fn [] (swap! runs inc) (r/tracked-deref cur)))]
+      (is (= 1 @rx))
+      (is (= 2 (r/cursor-swap! cur inc)))
+      (is (= 1 @runs) "queued, not synchronous")
+      (r/flush!)
+      (is (= 2 @rx))
+      (is (= 2 @runs))))
+  (testing "read-only cursors and plain atoms refuse to be written"
+    (let [src (atom {:n 1})]
+      (is (not (r/writable-cursor? (r/cursor src [:n]))))
+      (is (not (r/writable-cursor? src)))
+      (is (thrown-with-msg? Exception #"not a writable cursor"
+                            (r/cursor-reset! (r/cursor src [:n]) 2)))
+      (is (thrown-with-msg? Exception #"not a writable cursor"
+                            (r/cursor-swap! src inc)))
+      (is (= {:n 1} @src) "refused writes never touched the source")))
+  (testing "a disposed cursor is inert — no zombie write-back"
+    (let [src (atom {:n 1})
+          cur (r/writable-cursor src [:n])]
+      (is (= 1 @cur))
+      (r/dispose! cur)
+      (is (nil? @cur) "derefs answer nil")
+      (is (nil? (r/cursor-reset! cur 9)) "the write is refused, not landed")
+      (is (nil? (r/cursor-swap! cur inc)))
+      (is (= {:n 1} @src) "the source was never touched")))
+  (testing "a write through a disposed nested lens is refused, not silently dropped"
+    (let [src (atom {:a {:b 1}})
+          outer (r/writable-cursor src [:a])
+          inner (r/writable-cursor outer [:b])]
+      (is (= 1 @inner))
+      (r/cursor-reset! inner 2)
+      (is (= {:a {:b 2}} @src) "nested lens writes compose")
+      (r/dispose! outer)
+      (is (nil? (r/cursor-reset! inner 9))
+          "the refusal propagates up the lens chain")
+      (is (= {:a {:b 2}} @src) "nothing was written through the dead lens")))
+  (testing "a reaction source is rejected at construction, loudly"
+    (let [src (atom {:n 1})
+          ro (r/cursor src [:n])]
+      (is (thrown-with-msg? Exception #"source must be a plain atom"
+                            (r/writable-cursor ro [:deeper])))
+      (is (thrown-with-msg? Exception #"source must be a plain atom"
+                            (r/writable-cursor (r/make-reaction (fn [] 1)) []))))))
+
 (deftest test-manual-track-lazy-and-disposed
   (testing "manual track caches and disposes with its last watcher"
     (let [a (atom 1)

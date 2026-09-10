@@ -25,9 +25,12 @@
 
    Props: display leaves (text/markdown/spacer/string) are rebuilt when
    their props change — identity-free, their caches absorb rendering;
-   equal props short-circuit to the same instance. Containers keep their
-   instance across passes; their structural props (padding/gap) are
-   create-time until the §4 props/state migration makes them live.
+   equal props short-circuit to the same instance. Stateful tags declare
+   an :apply path (see the tag table): a changed prop patches the live
+   instance — state and focus survive — and only a prop the tag cannot
+   express rebuilds it. Containers keep their instance across passes;
+   their structural props (padding/gap) are create-time until the §4
+   props/state migration makes them live.
 
    Validation is loud per the v1 error contract: unknown tags throw with a
    did-you-mean suggestion, children on a leaf tag throw, duplicate :keys
@@ -103,14 +106,14 @@
 ;; invoked on frames where nothing it derefs changed shows up as
 ;; bodies-run climbing while bodies-skipped stays flat.
 (def ^:private zero-counters
-  {:bodies-run 0 :bodies-skipped 0 :constructs 0 :reuses 0 :disposals 0
-   :computes 0})
+  {:bodies-run 0 :bodies-skipped 0 :constructs 0 :reuses 0 :applies 0
+   :disposals 0 :computes 0})
 
 (defonce ^:private counters-atom (atom zero-counters))
 
 (defn counters
   "Per-frame fn-invocation/reconcile counters ({:bodies-run :bodies-skipped
-   :constructs :reuses :disposals :computes}). Process-wide;
+   :constructs :reuses :applies :disposals :computes}). Process-wide;
    reset-counters! in tests."
   [] @counters-atom)
 
@@ -139,6 +142,27 @@
 ;;                 itemization happens once, in reconcile-into. put installs
 ;;                 the reconciled items back (:item wins — stacks store
 ;;                 entry maps, other containers components).
+;;   :entries?   — children of this tag may be stack entry maps
+;;   :apply      — optional prop→state patch path for stateful tags:
+;;                 (fn [comp prev-props props]) called on a matched leaf
+;;                 whose props CHANGED; truthy = patch applied, the
+;;                 instance is kept (state and focus survive the change),
+;;                 falsy = the tag cannot express these props on the live
+;;                 instance and the leaf is retired and rebuilt as usual.
+;;                 Check structural props FIRST and return falsy before
+;;                 mutating; compare them in their CONSTRUCTED form (a nil
+;;                 prop and its default are the same component) so a
+;;                 spelling change does not churn a rebuild. Tags without
+;;                 :apply always rebuild on change (display leaves are
+;;                 identity-free by design).
+;;
+;;                 Inside an :apply, a STATE-CARRYING prop is written
+;;                 through only when it differs from PREV-PROPS, and then
+;;                 coerced the way construction coerces it (nil ⇒ the
+;;                 default). An unchanged prop never overwrites live state
+;;                 — that is what lets typing, selection and expansion
+;;                 survive an unrelated prop change — while a changed prop
+;;                 is an instruction and wins.
 ;;
 ;; Adapter ctors destructure known props and ignore extras, EXCEPT the
 ;; pseudo-props :key/:ref which parse strips before ctors ever see them.
@@ -176,21 +200,89 @@
                                                 :interval-ms (or interval-ms 100)
                                                 :spinner-color-fn spinner-color-fn
                                                 :message-color-fn message-color-fn))
-                  :primary :text}
+                  :primary :text
+                  :apply (fn [s prev props]
+                           ;; frames/interval have no faithful setter (the only
+                           ;; one, set-indicator!, switches the spinner to
+                           ;; verbatim rendering and drops the color fn) — a
+                           ;; change there rebuilds. Everything else patches,
+                           ;; and the animation timer is left alone unless
+                           ;; :active actually flips (a rebuild would restart
+                           ;; the animation on every text tick).
+                           (if (or (not= (or (:frames prev) spinner/default-frames)
+                                         (or (:frames props) spinner/default-frames))
+                                   (not= (or (:interval-ms prev) 100)
+                                         (or (:interval-ms props) 100)))
+                             false
+                             (do
+                               (when (not= (boolean (:active props))
+                                           (boolean (:active prev)))
+                                 (if (:active props)
+                                   (spinner/spinner-start! s)
+                                   (spinner/spinner-stop! s)))
+                               (when (not= (or (:text props) "")
+                                           (or (:text prev) ""))
+                                 (spinner/spinner-set-text! s (or (:text props) "")))
+                               (when (not= (or (:prefix props) "  ")
+                                           (or (:prefix prev) "  "))
+                                 (spinner/spinner-set-prefix! s (or (:prefix props) "  ")))
+                               (when (not= (:spinner-color-fn props)
+                                           (:spinner-color-fn prev))
+                                 (spinner/spinner-set-spinner-color-fn!
+                                  s (:spinner-color-fn props)))
+                               (when (not= (:message-color-fn props)
+                                           (:message-color-fn prev))
+                                 (spinner/spinner-set-message-color-fn!
+                                  s (:message-color-fn props)))
+                               true)))}
    :input        {:ctor (fn [{:keys [value on-submit on-escape]}]
                           (let [i (input/make-input)]
                             (when value (input/input-set-value! i value))
                             (when on-submit (input/input-set-on-submit! i on-submit))
                             (when on-escape (input/input-set-on-escape! i on-escape))
                             i))
-                  :primary :value}
+                  :primary :value
+                  :apply (fn [i prev props]
+                           ;; a state-carrying prop is written through only
+                           ;; when IT changed, and then coerced like
+                           ;; construction (nil ⇒ empty): an unchanged
+                           ;; :value never overwrites live state, so typing
+                           ;; survives an unrelated prop change. Callbacks
+                           ;; always apply — configuration, not state.
+                           (when (not= (:value props) (:value prev))
+                             (let [v (or (:value props) "")]
+                               (when (not= v (input/input-get-value i))
+                                 (input/input-set-value! i v))))
+                           (input/input-set-on-submit! i (:on-submit props))
+                           (input/input-set-on-escape! i (:on-escape props))
+                           true)}
    :expandable-text {:ctor (fn [{:keys [collapsed-fn expanded-fn
                                         expanded? padding-x padding-y]}]
                              (expandable-text/make-expandable-text
                               collapsed-fn expanded-fn
                               :expanded? (boolean expanded?)
                               :padding-x (or padding-x 0)
-                              :padding-y (or padding-y 0)))}
+                              :padding-y (or padding-y 0)))
+                     :apply (fn [et prev props]
+                              ;; content fns are baked into the inner Text at
+                              ;; construction (a padding/fn change rebuilds;
+                              ;; compared in constructed form, so a missing
+                              ;; padding key equals its 0 default)
+                              (if (or (not= (:collapsed-fn prev) (:collapsed-fn props))
+                                      (not= (:expanded-fn prev) (:expanded-fn props))
+                                      (not= (or (:padding-x prev) 0)
+                                            (or (:padding-x props) 0))
+                                      (not= (or (:padding-y prev) 0)
+                                            (or (:padding-y props) 0)))
+                                false
+                                (do
+                                  ;; :expanded? is the live half, written only
+                                  ;; when IT changed (nil ⇒ collapsed, the
+                                  ;; construct default)
+                                  (when (not= (:expanded? props) (:expanded? prev))
+                                    (expandable-text/expandable-text-set-expanded!
+                                     et (boolean (:expanded? props))))
+                                  true)))}
    :image        {:ctor (fn [{:keys [base64-data mime-type theme
                                      max-width-cells max-height-cells
                                      filename image-id]}]
@@ -217,7 +309,34 @@
                            :on-escape on-escape
                            :on-selection-change on-selection-change
                            :on-key on-key))
-                  :primary :items}
+                  :primary :items
+                  :apply (fn [sl prev props]
+                           ;; items patch only on a real change, and they
+                           ;; patch PRESERVING the filter + selection: an
+                           ;; items refresh is the same question re-asked,
+                           ;; so it must not eat the user's typed filter
+                           (when (not= (:items prev) (:items props))
+                             (select-list/select-list-set-items!
+                              sl (or (:items props) [])
+                              {:preserve-state? true}))
+                           (select-list/select-list-set-height!
+                            sl (or (:height props) 10))
+                           (select-list/select-list-set-theme!
+                            sl (or (:theme props) select-list/default-theme))
+                           (select-list/select-list-set-header! sl (:header props))
+                           (select-list/select-list-set-no-match-text!
+                            sl (or (:no-match-text props) "  No matching commands"))
+                           (select-list/select-list-set-column-bounds!
+                            sl (:min-primary-column-width props)
+                            (:max-primary-column-width props))
+                           (select-list/select-list-set-truncate-primary!
+                            sl (:truncate-primary props))
+                           (select-list/select-list-set-on-select! sl (:on-select props))
+                           (select-list/select-list-set-on-escape! sl (:on-escape props))
+                           (select-list/select-list-set-on-selection-change!
+                            sl (:on-selection-change props))
+                           (select-list/select-list-set-on-key! sl (:on-key props))
+                           true)}
    :settings-list {:ctor (fn [{:keys [items theme on-change on-escape
                                       enable-search max-visible]}]
                            (let [sl (settings-list/make-settings-list
@@ -230,7 +349,30 @@
                                (settings-list/settings-list-set-on-escape! sl
                                                                            on-escape))
                              sl))
-                   :primary :items}
+                   :primary :items
+                   :apply (fn [sl prev props]
+                            ;; the search input is built at construction
+                            ;; (enable-search) — toggling it rebuilds
+                            (if (not= (boolean (:enable-search prev))
+                                      (boolean (:enable-search props)))
+                              false
+                              (do
+                                ;; items patch only on a real change (nil ⇒ []),
+                                ;; preserving the query + selection — an items
+                                ;; refresh must not eat the typed search
+                                (when (not= (:items prev) (:items props))
+                                  (settings-list/settings-list-set-items!
+                                   sl (or (:items props) [])
+                                   {:preserve-state? true}))
+                                (settings-list/settings-list-set-theme!
+                                 sl (or (:theme props) settings-list/default-theme))
+                                (settings-list/settings-list-set-on-change!
+                                 sl (:on-change props))
+                                (settings-list/settings-list-set-on-escape!
+                                 sl (:on-escape props))
+                                (settings-list/settings-list-set-max-visible!
+                                 sl (or (:max-visible props) 10))
+                                true)))}
    :editor       {:ctor (fn [{:keys [text height padding-x border-fn border
                                      keybindings terminal-rows
                                      on-submit on-change]}]
@@ -244,13 +386,61 @@
                             (when on-submit (editor/editor-set-on-submit! ed on-submit))
                             (when on-change (editor/editor-set-on-change! ed on-change))
                             ed))
-                  :primary :text}
+                  :primary :text
+                  :apply (fn [ed prev props]
+                           ;; structural props have no setters — a change here
+                           ;; rebuilds (checked before anything is mutated;
+                           ;; a nil border and its :normal default are the
+                           ;; same component, so they compare equal)
+                           (if (or (not= (or (:border prev) :normal)
+                                         (or (:border props) :normal))
+                                   (not= (:border-fn prev) (:border-fn props))
+                                   (not= (:keybindings prev) (:keybindings props)))
+                             false
+                             (do
+                               ;; :text is written only when IT changed (nil ⇒
+                               ;; empty, the construct default) and differs from
+                               ;; live text: editor-set-text! at an equal text
+                               ;; would still reset scroll/undo bookkeeping, and
+                               ;; an unchanged prop must not clobber live typing
+                               (when (not= (:text props) (:text prev))
+                                 (let [t (or (:text props) "")]
+                                   (when (not= t (editor/editor-get-text ed))
+                                     (editor/editor-set-text! ed t))))
+                               (editor/editor-set-height! ed (or (:height props) 12))
+                               (editor/editor-set-padding-x!
+                                ed (or (:padding-x props) 0))
+                               (editor/editor-set-terminal-rows!
+                                ed (:terminal-rows props))
+                               (editor/editor-set-on-submit! ed (:on-submit props))
+                               (editor/editor-set-on-change! ed (:on-change props))
+                               true)))}
    :cancellable-loader {:ctor (fn [{:keys [spinner on-abort text]}]
                                 (cancellable-loader/make-cancellable-loader
                                  :spinner (or spinner
                                               (spinner/make-spinner :text text
                                                                     :active true))
-                                 :on-abort on-abort))}
+                                 :on-abort on-abort))
+                        :apply (fn [cl prev props]
+                                 ;; a changed :spinner prop is a child swap —
+                                 ;; the field has no setter, and assoc-ing one
+                                 ;; would bypass construction (nothing would
+                                 ;; own the replacement), so it rebuilds
+                                 (if (not= (:spinner prev) (:spinner props))
+                                   false
+                                   (do
+                                     ;; :text feeds the DEFAULT spinner at
+                                     ;; construction — with a :spinner prop it
+                                     ;; is ignored, exactly as in the ctor
+                                     (when (and (nil? (:spinner props))
+                                                (not= (or (:text props) "")
+                                                      (or (:text prev) "")))
+                                       (spinner/spinner-set-text!
+                                        (:spinner cl) (or (:text props) "")))
+                                     (when (not= (:on-abort props) (:on-abort prev))
+                                       (cancellable-loader/cancellable-loader-set-on-abort!
+                                        cl (:on-abort props)))
+                                     true)))}
    :box       {:ctor (fn [{:keys [padding-x padding-y bg-fn]}]
                        (box/make-box
                         (or padding-x 1) (or padding-y 1) bg-fn))
@@ -741,29 +931,47 @@
 (defn- reuse-or-build
   "Matched pair → [kept-item retired-prev?]. Display leaves rebuild when
    their props changed (identity-free; the equal-props fast path keeps
-   unchanged frames free); everything else keeps the previous instance."
+   unchanged frames free); everything else keeps the previous instance.
+   A tag with an :apply spec gets the third path: props changed, but the
+   live instance can express them — patch in place and keep it (state and
+   focus survive), falling back to rebuild when :apply declines."
   [d prev]
-  (letfn [(keep [c item]
+  (letfn [(keep [c]
             {:item {:kind (:kind d) :mkey (:mkey d) :key (:key d)
-                    :ref (:ref d) :c c :item item :owned true}
-             :retire nil})]
+                    :ref (:ref d) :c c :item c :owned true}
+             :retire nil})
+          (fill-ref! [c]
+            (when-some [r (:ref d)]
+              (-fill-ref! r c)
+              (remember-ref! c r)))]
     (case (:kind d)
       ::host
       (let [container? (some? (:lens (:spec d)))
+            apply-fn (:apply (:spec d))
             prev-props (:props (stamped-meta (:c prev)))]
-        (if (or container? (= (:props d) prev-props))
+        (cond
+          (or container? (= (:props d) prev-props))
           (do (bump! :reuses)
               (when container?
                 (reconcile-into (:lens (:spec d)) (:c prev) (:nodes d)
                                 (boolean (:entries? (:spec d)))))
-              (when-some [r (:ref d)]
-                (-fill-ref! r (:c prev))
-                (remember-ref! (:c prev) r))
-              (keep (:c prev) (:c prev)))
+              (fill-ref! (:c prev))
+              (keep (:c prev)))
+
+          ;; changed props on a patchable tag: patch the live instance and
+          ;; keep it. The stamp's :props is the next pass's comparison
+          ;; base, so the patched instance must remember the new props.
+          (and apply-fn (apply-fn (:c prev) prev-props (:props d)))
+          (do (bump! :applies)
+              (swap! (:dsl/meta (:c prev)) assoc :props (:props d))
+              (fill-ref! (:c prev))
+              (keep (:c prev)))
+
           ;; leaf with different props: rebuild. Retire FIRST — the old
           ;; instance's stamp holds the same ref handle the fresh construct
           ;; is about to fill; retiring afterwards would wipe it. Returns
           ;; the full new item map (no retire left for the caller).
+          :else
           (do (retire-item! prev)
               {:item (construct-item d) :retire nil})))
       ::fncomp
@@ -771,10 +979,8 @@
         (bump! :reuses)
         (reset! (:props w) (:props d))
         (reset! (:ctree w) (:ctree d))
-        (when-some [r (:ref d)]
-          (-fill-ref! r w)
-          (remember-ref! w r))
-        (keep w w))
+        (fill-ref! w)
+        (keep w))
       ;; ::string — a display leaf like a host leaf: rebuild when the text
       ;; changed (the parsed item has no :c; falling through to the
       ;; passthrough below would install a nil child), keep otherwise
@@ -782,7 +988,7 @@
       (let [prev-props (:props (stamped-meta (:c prev)))]
         (if (= (:props d) prev-props)
           (do (bump! :reuses)
-              (keep (:c prev) (:c prev)))
+              (keep (:c prev)))
           (do (retire-item! prev)
               {:item (construct-item d) :retire nil})))
       ;; ::record / ::entry — passthrough, take the DESIRED payload (the
