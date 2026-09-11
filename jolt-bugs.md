@@ -1,18 +1,18 @@
-# jolt-bugs — jolt issue inventory
+# jolt-bugs — open upstream tickets
 
-Everything this repo knows about jolt-side bugs and upstream tickets.
-`jolt-port.md` / `jolt-tui.md` describe port state without ticket IDs.
+Every **open** jolt-side ticket whose fix requires a change in kmet. Closed and
+unfiled findings are not tracked here. `jolt-port.md` / `jolt-tui.md` describe
+port state without ticket IDs.
 
 **Workarounds live next to their ticket below.** Each workaround block is the
 removal checklist: when an upstream fix lands, delete the listed code (and the
 block). Source comments describe the local *why* without ticket numbers —
 grep this file to find what `file:line` belongs to which ticket.
 
-Historical labels from the deleted `bb-jolt.md` map as: `JOLT-10`→#945,
-`JOLT-11`→#946, `JOLT-12`→#947, `JOLT-13`→#944; git history has the full
-field reports.
+Historical labels from the deleted `bb-jolt.md` map as: `JOLT-12`→#947,
+`JOLT-13`→#944; git history has the full field reports.
 
-## Filed by kmet — open
+## Open
 
 ### [jolt#944](https://github.com/jolt-lang/jolt/issues/944) — `jolt build` binary dies on `unbound fn jolt.time.impl/register-type!`
 

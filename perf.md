@@ -4,6 +4,10 @@ Why `jolt run` burns more CPU than `bb run` on the same tree, what was measured,
 and what to do about it. Numbers from a Termux/aarch64 phone (100x30 tmux pty,
 `jolt v0.8.6-83-g3de3e02b`, bb 1.12.x), 2026-09-11.
 
+**Re-verified on the installed `jolt v0.8.6-86-g234f460b` (x86_64 WSL2) — §9 is
+the current state.** Every µs figure in §3/§5/§7 predates that build and is
+stale in absolute terms; the orderings and the §5 decisions all still hold.
+
 **TL;DR** — it is not a busy loop and not the terminal backend. Idle CPU is
 *lower* on jolt than on bb. The gap is that (a) every keystroke/frame re-renders
 the whole component tree + re-normalizes every line + diffs/emits, and (b) jolt's
@@ -16,10 +20,12 @@ interpretation: jolt already compiles every top-level form to native Scheme
 uniformly slow runtime.
 
 The quick wins in §5 are applied and measured: **`jolt run` typing CPU dropped
-~28 % and is now at parity with `bb run`** for that workload (§7), with bb
-unchanged. The next levers are §6.1 (per-frame line work), §6.3 (incremental
+~28 %** on that workload (§7), with bb unchanged. Parity with `bb run` held on
+the phone but **not on x86_64** (~1.6x there — §9.3): the improvement is
+host-independent, the ratio is not. The next levers are §6.3 (incremental
 markdown) and §6.6 (extend the ANSI scanner carve-out to the remaining
-per-escape sites). `jolt build` is *not* a lever (§6.2).
+per-escape sites); §6.1's normalize guard is dead (§9.4). `jolt build` is *not*
+a lever (§6.2).
 
 ---
 
@@ -179,7 +185,10 @@ above only run when a frame is rendered.
 ## 5. Applied quick wins (local, semantics-preserving)
 
 All four are applied in this tree (the sections below started as proposals and
-now record the measured result). Re-verify with the recipes in §1.
+now record the measured result). Re-verify with the recipes in §1. The per-op
+numbers below are the original phone/`-83` measurements; an A/B against the
+pre-§5 *files* on the installed `-86` build confirms all four still win on jolt
+(§9.2).
 
 ### 5.1 `visible-width`: printable-ASCII test first, strip only when needed
 
@@ -299,18 +308,20 @@ The styled-line 3x gap is gone (jolt 1.26x bb on that input, was 3.0x).
 
 Ordered by expected effect on `jolt run` typing/streaming CPU.
 
-### 6.1 Cut per-frame line work (helps both hosts, ~1.9x for jolt)
+### 6.1 Cut per-frame line work (the reset concat remains)
 
-Per frame, every line is re-normalized and re-reset:
+Per frame every line is re-normalized and re-reset. Of the proposals below,
+**one is dead and one stands** (§9.4):
 
-- `(mapv utils/normalize-terminal-output lines)` runs two `str/replace` calls
-  (Thai/Lao AM decomposition) plus a tab replace on **every line** even though
-  essentially no line contains `\u0e33`/`\u0eb3`/`\t`. Both replacements are
-  unconditional string-pattern calls; guard them behind `str/includes?` (or
-  fold the check into the existing tab test) once measured — per call, the
-  replace machinery (pattern matching + replacement splicing) costs more than
-  a scan, but the scans themselves are not free, so A/B it with the §4
-  instrumented loop rather than assuming.
+- ~~`(mapv utils/normalize-terminal-output lines)` … guard the replaces behind
+  `str/includes?`~~ — **DEAD, do not apply.** A/B'd with the §4 loop on `-86`:
+  `normalize-terminal-output` costs **1.05 µs** on a plain 100-char line on
+  jolt, and the guarded form (`3 × str/includes?` ≈ 0.35 µs each + pass-through)
+  costs **1.18 µs** — the scans are not cheaper than the replaces they skip.
+  The Thai/Lao replaces are near-free on non-matching input anyway (the
+  decomposed case measures 0.41 µs), and the whole phase is 4-8 % of frame.
+  (`#953` landed, so a `java.text.Normalizer` call is now *available* — it is
+  not *faster* than the current replaces, so do not switch.)
 - `(mapv (fn [line] (str line SEGMENT-RESET)) lines)` allocates a new string
   per line per frame. Cache the composed string on the component cache keyed by
   the raw line, or diff the *raw* lines and append `SEGMENT-RESET` only at
@@ -318,8 +329,11 @@ Per frame, every line is re-normalized and re-reset:
 - `composite-flashes` runs `visible-width` per flash line per frame — cheap
   after 5.1, fine.
 
-These three phases were 20 % of frame time on jolt (202 ms/200 frames); the
-`normalize` half (8 %) is the redundant part — guard it and re-measure.
+These two phases were ~12 % of frame time on jolt (202 ms/200 frames, §3.1).
+The `normalize` half is **not** recoverable (above), so the remaining item is
+the `SEGMENT-RESET` concat alone — 2.9 µs/line on jolt vs 1.05 on bb, ~6 % of
+frame — where the cost is the extra per-line `mapv` walk, not the 0.05 µs concat
+itself.
 
 ### 6.2 `jolt build` is not the lever it looks like
 
@@ -402,8 +416,9 @@ escape sites, all of which sit on jolt's slow path:
 
 - `slice-with-width` / `truncate-to-width` / `sgr-state-at` / `composite-line`
   call `ansi-code-at` → `match-at` → `re-matcher` once per escape;
-- `match-at` measured **jolt 5.0 µs vs scanner 1.4 µs** per call (bb: 1.9 vs
-  4.1 — the opposite, hence another `#?(:jolt … :default …)`):
+- `ansi-code-at` re-measured on `-86`: **jolt 1.36 µs vs scanner 0.26 µs**
+  (5x, unchanged in shape); bb is the opposite way (regex 0.55 vs scanner 0.74),
+  hence another `#?(:jolt … :default …)`: still worth doing (§9.4).
 
 ```clojure
 (defn- ansi-code-at [s i]
@@ -418,12 +433,26 @@ line truncation on ANSI-dense lines (tool output, markdown) — smaller than
 
 ### 6.7 Watch upstream
 
-- `java.util.regex` on jolt is irregex: `jolt-bugs.md` #945/#956 are the same
-  engine. Any upstream regex improvement moves a large share of §3.3 at once.
-- `jolt-bugs.md` #953 (`java.text.Normalizer` unusable) — if fixed, the
-  `normalize-terminal-output` replaces could become a Normalizer call.
+- `java.util.regex` on jolt is irregex. **#945 (DFA blowup), #953 (Normalizer),
+  #956 (UNIX_LINES terminators) and #955 (Base64 MIME) all landed in the
+  installed `v0.8.6-86` (PR #957)** and moved a large share of §3.3 at once
+  (§9.1). They did not close the gap: jolt's regex is still 2-4x bb on this
+  path, so the host carve-outs stay.
+- **jolt's regex engine picks its matcher from capture-group count.** A
+  group-free pattern goes to irregex's DFA, a grouped one to the backtracker
+  (`java.util.regex`'s own engine). On kmet's patterns this is mostly the right
+  split, so treat it as context, not an action item: the effect is 1.9-3x **for**
+  the DFA where matches are dense or anchored (`tool_renderers`'s diff tokenizer,
+  `edit_diff`), ~3x **against** it where sparse matches are consumed
+  (ANSI-CODE-RE `re-seq`/`str/replace` — already on the scanner), and ~25 ms
+  one-time for a 49-branch union (§9.1). bb shows no gap in any of them.
+- Two measurement traps this file has fallen into twice (§9.1): irregex's warmup
+  rounds run 3-4x steady state, so benchmarks must interleave A/B/A and discard
+  warmup (§6.2b); and wrapping a grouped pattern as `( (?i)… )` moves `(?i)`
+  *inside* the group, which produced a bogus 113x regression.
 - Reader/IO workarounds (#946/#947/#948/#952/#954) are on the tool/IO paths,
-  not the frame path; they do not affect the numbers above.
+  not the frame path; they do not affect the numbers above. #946/#948/#952
+  landed in `-86`; #947 (redirectInput) and #954 (`write(byte[])`) remain.
 
 ---
 
@@ -437,14 +466,20 @@ KILLED of any background build, median of 3:
 | HEAD | 158 / 157 / 155 → **157** | 115 / 106 / 114 → **114** | 1.38x |
 | with §5 wins | 113 / 113 / 99 → **113** | 116 / 107 / 127 → **116** | **0.97x** |
 
-`jolt run` typing CPU dropped **~28 %** on this workload and is now at parity
-with `bb run` (the ratio used to be 1.4–2.5x depending on the run). bb is
-unchanged, as expected: §5.1 and §5.2 are near-no-ops on its primitives, and
-§5.4 deliberately keeps the regex path there.
+`jolt run` typing CPU dropped **~28 %** on this workload (the ratio used to be
+1.4–2.5x depending on the run). bb is unchanged, as expected: §5.1 and §5.2 are
+near-no-ops on its primitives, and §5.4 deliberately keeps the regex path there.
+
+**The parity claim is phone-specific.** Re-measured on x86_64 (§9.3) the same
+~24 % drop reproduces, but from 68 to 51 ticks/300 keys against bb's 30-32 —
+**~1.6x**, not 0.97x. The phone is memory-bandwidth-bound, which penalizes
+jolt's allocation-heavy path hardest; on a fast x86 box that pressure is absent
+and the residual primitive gap shows. Read §7's ratio as "closed on this
+device", not as a host-independent property.
 
 Caveat: this is one workload (typing into a fresh editor). Streaming markdown
 and scrolled-up frames depend on the frame path — re-measure with a pinned
-fixture before generalizing; that is exactly what §6.1/§6.3 target.
+fixture before generalizing; that is exactly what §6.3 targets.
 
 ---
 
@@ -462,3 +497,145 @@ fixture before generalizing; that is exactly what §6.1/§6.3 target.
 - Performance: re-run the recipes in §1; use steady-state (warmup) microbenches
   and the `/proc/<pid>/stat` per-key method (a 14 s settle, 150 keys at 25 ms,
   fresh session per round, median of 3). Record numbers here.
+
+---
+
+## 9. Re-measurement on the installed `v0.8.6-86-g234f460b` (x86_64)
+
+Re-run of §3/§5/§7 after upgrading jolt. Different machine class from §1's
+Termux/aarch64 phone (x86_64 WSL2, 14 cores; `bb` 25.0.4/GraalVM): **absolute
+µs are not comparable across machines** — compare ratios and same-machine A/Bs,
+not the tables' numbers. The §5 optimizations are pinned the strongest way
+available: the pre-§5 *files* (`db199e5^`'s `utils.clj` / `keys.clj` /
+`editor.clj`) loaded side by side with the current tree, on the same jolt.
+
+> Measurement caveat: like §4, the frame instrumentation was applied, measured,
+> and reverted (`git status` clean before and after). The per-op A/Bs are
+> steady-state medians of 5 rounds with 2 warmups; the typing numbers are
+> medians of 3 fresh sessions.
+
+### 9.1 Upstream moved the primitives a lot
+
+`v0.8.6-86` = PR #957 (regex DFA work budget #945, UNIX_LINES terminator set
+#956, Normalizer #953, Base64 MIME #955, Reader/IO #946/#948/#952) plus the
+upstream perf items in its changelog. Same microbenches, phone numbers alongside:
+
+| op (jolt) | §3.3 (−83, phone) | −86 (x86) | bb −86 | jolt/bb |
+|---|---|---|---|---|
+| `str/replace` ANSI-CODE-RE, styled 100ch | 17.3 µs | **7–8** | 1.7 | 4.1x |
+| `visible-width` styled 100ch | 24.5 | **4.2** | 2.9 | 1.4x |
+| `visible-width` 1-char | 3.0 | **0.27** | 0.11 | 2.5x |
+| `visible-width` plain 100ch | 10.9 | **2.5** | 1.2 | 2.1x |
+
+(`md/parse` is measured at a different size than §3.3's row — 16.8 KB here vs
+21.6 KB there: **84 ms → 25 ms** on jolt, 13 ms bb, i.e. still ~1.9x.)
+
+So #945/#956 landed and the regex engine is materially faster — but jolt's
+`java.util.regex` is still 2-4x bb on this path, and **`mapv`/seq allocation is
+~10x** (`mapv identity` over 100 short lines: jolt 13.3 µs vs bb 1.4; `mapv inc`
+over 100: 13.8 vs 2.0). Every per-line `mapv` chain in the frame body pays it.
+
+**The #945 stall is gone, but the pattern it hit still pays a one-time DFA
+build.** kmet's real `retryable-error-regex` (the 49-alternation union, 873
+chars) has no capture group, so jolt compiles it to irregex's **DFA**; adding
+one capture group forces the **backtracker** (`java.util.regex`'s own engine).
+Cold start, one variant per fresh process:
+
+| `retryable-error-regex` | jolt | bb |
+|---|---|---|
+| cold first `re-find` (compile + DFA build) | **29.4 ms** | 0.42 ms |
+| … with one capture group (backtracker) | **3.7 ms** | 0.40 ms |
+| steady-state per `re-find` (1800-char miss) | 796 µs | 464 µs |
+| … with one capture group | 758 µs | 470 µs |
+
+So the DFA *build* is the cold cost (~25 ms of the 29.4, vs bb's 0.42), and
+**steady state is a wash** (796 vs 758 µs — the 1800-char scan dominates either
+engine). The workaround buys the one-time 25 ms and nothing per call.
+
+**Not filed upstream, and it should stay that way.** Nothing kmet runs gets
+faster from a fix: the classifier is a single `re-find` on an error path; the one
+scanning regex (§5.4) is already on the hand-rolled scanner, which beats *both*
+engines; and the remaining group-free multi-branch patterns are on the **right**
+engine — `tool_renderers`'s diff tokenizer `#"\s+|\S+"` is *faster* group-free
+(grouping costs 1.15x on jolt, 1.45x on bb), `edit_diff`'s
+`#"[^\n]*\n|[^\n]+"` is a wash. Worse, the obvious upstream fix
+("multi-branch → prefer the backtracker") would regress the diff tokenizer, and
+the DFA is the only thing standing between `kmet.libs.markdown`'s
+nested-quantifier matchers and catastrophic backtracking on non-matching input.
+If it is ever raised upstream, raise it narrowly as *"do not build a DFA the
+budget will reject"*, never as an engine preference.
+
+> Earlier revisions of this file claimed a 2.5x steady-state win for the
+grouped `retryable-error-regex` (2.01 → 0.79 ms). That was an artifact: the
+non-interleaved benchmark measured the *warming* rounds (irregex's first
+rounds are 3-4x its steady state — see §6.2b). The interleaved A/B/A numbers
+above replace it, and the proposed change to `kmet.app.loop` was dropped. A
+second revision measured a grouped `bare-url-re` as 113x slower; that was
+building the grouped pattern as `( (?i)… )`, which moves `(?i)` *inside* the
+group — with `(?i)` outside, grouped and group-free are identical (0.108 vs
+0.121 µs).
+
+### 9.2 The §5 wins are still needed — A/B against the pre-§5 files
+
+| op | pre-§5 | current | Δ | (bb pre → cur) |
+|---|---|---|---|---|
+| `strip-ansi-codes` styled | 6.85 µs | **0.92** | 7.4x | 1.77 → 2.09 |
+| `visible-width` plain 100 | 4.99 | **2.47** | 2.0x | 2.54 → 1.16 |
+| `visible-width` 1-char | 1.02 | **0.27** | 3.8x | 0.19 → 0.11 |
+| `visible-width` styled | 9.35 | **4.24** | 2.2x | 2.96 → 2.94 |
+| `visible-width` md | 9.28 | **4.28** | 2.2x | 2.90 → 3.47 |
+| `matches-key?` ctrl+c | 5.95 | **0.31** | **19x** | 2.14 → 0.62 |
+| 40 chord checks (one keystroke) | 244 µs | **12** | 20x | 92 → 13 |
+
+- **§5.1** holds, and the ASCII-first regex is still the right test: a hand-rolled
+  `loop`+`nth`+`int` printable-ASCII scan costs 3.6 µs vs the regex's 2.2 on
+  jolt (7.3 vs 1.1 on bb), so `re-find #"[^\u0020-\u007e]"` stays.
+- **§5.4** holds and the margin *widened*: jolt's regex strip got ~2.5x faster
+  (17.3 → 7-8 µs) but the scanner stayed ~1 µs, so 5x → **7.4x**. Frame-level,
+  with the carve-out forced off: diff+emit 27.9 → **34.9 ms**/200 frames (+25 %),
+  total frame 221 → 238 ms (+8 %), repeatable over 3 rounds.
+- **§5.2** holds and is the dominant end-to-end win (below).
+- **§5.3** (editor `trigger-spec`) is *not* re-measured: the code is unchanged
+  and untouched by the upgrade, and its re-pattern/escaping cost sits on the
+  same keystroke path §5.2 already dominates. No reason to expect it regressed.
+
+### 9.3 End-to-end: the improvement reproduces, the parity does not
+
+300 keys @ 20 ms, fresh session, 14 s settle, net CPU ticks (`/proc` fields 14+15
+minus an equal-length idle window), median shown:
+
+| tree | jolt runs | median | bb median |
+|---|---|---|---|
+| pre-§5 files | 66 / 68 / 81 | **68** | — |
+| current | 48 / 51 / 52 | **~51** | 30–32 |
+
+**~24 % typing-CPU drop** (perf.md's ~28 % reproduces). But jolt/bb is **~1.6x**
+here, not §7's 0.97x — parity was a phone property, not a host-independent one.
+The §5 wins bought the same *relative* improvement; they did not close the
+absolute gap on x86. Absolute ticks are not comparable to §7's either (a faster
+box commits the same key work in fewer ticks); read the ratios, not the counts.
+
+### 9.4 Frame attribution (200 frames, 23-line doc, instrumented per §4)
+
+| phase | jolt | bb | ratio | §3.1 ratio |
+|---|---|---|---|---|
+| render-stack | ~760 µs | ~375 | 2.0x | 1.7x |
+| normalize | ~84 | ~22 | 3.8x | 3.9x |
+| applyLineResets | ~67 | ~27 | 2.5x | 2.6x |
+| diff+emit | ~140 | ~77 | 1.8x | 1.9x |
+| **total** | **~1050** | **~498** | **2.1x** | 1.9x |
+
+Corrections to §3/§6:
+
+- **The pre-§5 and current frame phases are identical.** The §5 wins landed in
+  the *input* path (`matches-key?`), not the frame path — `visible-width` is not
+  called often enough per frame for its 2x to register there. §3.1's per-phase
+  ratios are the *unoptimized* frame; they remain the right targets.
+- **§6.1's normalize guard is dead**: `normalize-terminal-output` 1.05 µs vs the
+  guarded 1.18 µs on a plain line. The `SEGMENT-RESET` concat is the only
+  remaining line-work item, ~6 % of frame.
+- **§6.6 still stands**: `ansi-code-at` regex 1.36 µs vs scanner 0.26 on jolt
+  (bb 0.55 vs 0.74 the other way) — another `#?(:jolt … :default …)`.
+- **§6.3 is now the top algorithmic lever**: `Markdown` re-parses the whole text
+  per render (`text-atom` ticks, so `track!` cannot cache it) — 2.4 ms/frame at
+  2 KB, **25 ms at 16.8 KB** on jolt (13 ms bb).
