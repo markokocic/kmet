@@ -186,15 +186,13 @@
         (do (when-let [cb @on-escape-atom] (cb))
             nil)
 
-        ;; Down / Ctrl+n — wrap around (pi)
-        (or (match? data "tui.select.down")
-            (keys/matches-key? data (keys/ctrl "n")))
+        ;; Down / Ctrl+n — wrap around (pi; ctrl+n rides the id)
+        (match? data "tui.select.down")
         (do (when (pos? n) (swap! selected-idx-atom #(mod (inc %) n)))
             nil)
 
-        ;; Up / Ctrl+p — wrap around (pi)
-        (or (match? data "tui.select.up")
-            (keys/matches-key? data (keys/ctrl "p")))
+        ;; Up / Ctrl+p — wrap around (pi; ctrl+p rides the id)
+        (match? data "tui.select.up")
         (do (when (pos? n) (swap! selected-idx-atom #(mod (dec %) n)))
             nil)
 
@@ -215,11 +213,11 @@
             nil)
 
         ;; kmet extras (pi ignores these keys): right/left cycle values
-        (keys/matches-key? data "right")
+        (match? data "tui.settings.cycleForward")
         (do (when (pos? n) (cycle-value! this display selected 1))
             nil)
 
-        (keys/matches-key? data "left")
+        (match? data "tui.settings.cycleBackward")
         (do (when (pos? n) (cycle-value! this display selected -1))
             nil)
 

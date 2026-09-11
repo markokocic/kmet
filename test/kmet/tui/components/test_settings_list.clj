@@ -175,3 +175,24 @@
         (finally
           (kb/set-global-keybindings! prev))))))
 
+(t/deftest test-settings-list-value-cycling-resolves-through-the-manager
+  (t/testing "tui.settings.cycleForward/Backward (kmet) are ids"
+    (let [prev (kb/get-global-keybindings)]
+      (try
+        (kb/set-global-keybindings!
+         (kb/make-keybindings-manager kb/tui-keybinding-defs
+                                      {"tui.settings.cycleForward" "ctrl+e"
+                                       "tui.settings.cycleBackward" "ctrl+y"}))
+        (let [changes (atom [])
+              s (sl/make-settings-list sample-items
+                                       :on-change (fn [id v] (swap! changes conj [id v])))]
+          (core/handle-input s K-RIGHT)
+          (t/is (empty? @changes) "right was rebound away")
+          (core/handle-input s "\u0005")
+          (t/is (= [[:theme "light"]] @changes) "ctrl+e cycles forward")
+          (core/handle-input s "\u0019")
+          (t/is (= [[:theme "light"] [:theme "dark"]] @changes) "ctrl+y cycles back"))
+        (finally
+          (kb/set-global-keybindings! prev))))))
+
+

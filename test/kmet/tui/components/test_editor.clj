@@ -1176,6 +1176,46 @@
       (t/is (= ::none @submitted) "standalone ctrl+c is a no-op")
       (t/is (= "" (editor/editor-get-text e))))))
 
+(t/deftest test-editor-kitty-ctrl-h-and-ctrl-i-follow-their-ids
+  (t/testing "ctrl+h is deleteCharBackward's second chord, ctrl+i input.tab's
+              (kitty CSI-u encodings) — and a rebind moves both"
+    (let [e (editor/make-editor)]
+      (doseq [c "ab"] (core/handle-input e (str c)))
+      (core/handle-input e "\u001b[104;5u")   ;; kitty ctrl+h
+      (t/is (= "a" (editor/editor-get-text e)) "ctrl+h deletes backward")
+      (core/handle-input e "\u001b[105;5u")   ;; kitty ctrl+i
+      (t/is (= "a    " (editor/editor-get-text e)) "ctrl+i tabs (no provider)"))
+    (let [kmgr (app-kb/make-agent-keybindings-manager
+                {"tui.editor.deleteCharBackward" "ctrl+x"
+                 "tui.input.tab" "ctrl+t"})
+          e (editor/make-editor :keybindings kmgr)]
+      (doseq [c "ab"] (core/handle-input e (str c)))
+      (core/handle-input e "\u001b[104;5u")
+      (t/is (= "ab" (editor/editor-get-text e)) "ctrl+h was rebound away")
+      (core/handle-input e (ctrl 24))         ;; ctrl+x
+      (t/is (= "a" (editor/editor-get-text e)) "the new chord deletes")
+      (core/handle-input e "\u001b[105;5u")
+      (t/is (= "a" (editor/editor-get-text e)) "ctrl+i was rebound away")
+      (core/handle-input e (ctrl 20))         ;; ctrl+t
+      (t/is (= "a    " (editor/editor-get-text e)) "the new chord tabs"))))
+
+(t/deftest test-editor-kitty-ctrl-and-alt-enter-are-newline-chords
+  (t/testing "ctrl+enter and alt+enter ride tui.input.newLine"
+    (let [e (editor/make-editor)]
+      (doseq [c "ab"] (core/handle-input e (str c)))
+      (core/handle-input e "\u001b[13;5u")    ;; kitty ctrl+enter
+      (t/is (= "ab\n" (editor/editor-get-text e)) "ctrl+enter inserts a newline")
+      (core/handle-input e "\u001b[13;3u")    ;; kitty alt+enter
+      (t/is (= "ab\n\n" (editor/editor-get-text e)) "alt+enter inserts a newline"))
+    (let [kmgr (app-kb/make-agent-keybindings-manager {"tui.input.newLine" "ctrl+n"})
+          e (editor/make-editor :keybindings kmgr)]
+      (doseq [c "ab"] (core/handle-input e (str c)))
+      (core/handle-input e "\u001b[13;5u")
+      (t/is (= "ab" (editor/editor-get-text e)) "ctrl+enter was rebound away")
+      (core/handle-input e (ctrl 14))         ;; ctrl+n
+      (t/is (= "ab\n" (editor/editor-get-text e)) "the new chord inserts a newline"))))
+
+
 
 
 

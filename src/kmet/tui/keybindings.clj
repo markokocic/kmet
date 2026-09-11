@@ -23,7 +23,7 @@
    "tui.editor.jumpBackward"       {:default-keys ["ctrl+alt+]" "ctrl+shift+]"] :description "Jump backward to character"}
    "tui.editor.pageUp"             {:default-keys ["pageUp" "ctrl+pageUp"]  :description "Page up"}
    "tui.editor.pageDown"           {:default-keys ["pageDown" "ctrl+pageDown"] :description "Page down"}
-   "tui.editor.deleteCharBackward" {:default-keys ["backspace"]         :description "Delete char backward"}
+   "tui.editor.deleteCharBackward" {:default-keys ["backspace" "ctrl+h"] :description "Delete char backward"}
    "tui.editor.deleteCharForward"  {:default-keys ["delete" "ctrl+d"]   :description "Delete char forward"}
    "tui.editor.deleteWordBackward" {:default-keys ["ctrl+w" "alt+backspace"] :description "Delete word backward"}
    "tui.editor.deleteWordForward"  {:default-keys ["alt+d" "alt+delete"]     :description "Delete word forward"}
@@ -39,16 +39,22 @@
    ;; the user moves killLine elsewhere)
    "tui.editor.redo"               {:default-keys ["ctrl+z"]            :description "Redo"}
    "tui.editor.killLine"           {:default-keys ["ctrl+w"]            :description "Delete the current line"}
-   "tui.input.newLine"             {:default-keys ["shift+enter" "ctrl+j"] :description "Insert newline"}
+   "tui.input.newLine"             {:default-keys ["shift+enter" "ctrl+j" "ctrl+enter" "alt+enter"] :description "Insert newline"}
    "tui.input.submit"             {:default-keys ["enter"]              :description "Submit input"}
-   "tui.input.tab"                {:default-keys ["tab"]                :description "Tab / autocomplete"}
+   "tui.input.tab"                {:default-keys ["tab" "ctrl+i"]       :description "Tab / autocomplete"}
    "tui.input.copy"               {:default-keys ["ctrl+c"]             :description "Copy selection"}
-   "tui.select.up"                {:default-keys ["up"]                 :description "Move selection up"}
-   "tui.select.down"              {:default-keys ["down"]               :description "Move selection down"}
+   "tui.select.up"                {:default-keys ["up" "ctrl+p"]       :description "Move selection up"}
+   "tui.select.down"              {:default-keys ["down" "ctrl+n"]     :description "Move selection down"}
    "tui.select.pageUp"            {:default-keys ["pageUp"]             :description "Page up"}
    "tui.select.pageDown"          {:default-keys ["pageDown"]           :description "Page down"}
    "tui.select.confirm"           {:default-keys ["enter"]              :description "Confirm selection"}
-   "tui.select.cancel"            {:default-keys ["escape" "ctrl+c"]    :description "Cancel selection"}})
+   "tui.select.cancel"            {:default-keys ["escape" "ctrl+c"]    :description "Cancel selection"}
+   ;; kmet extension ids — pi's SelectList/SettingsList have no first/last
+   ;; jumps or value cycling on left/right
+   "tui.select.first"             {:default-keys ["home"]                :description "Move selection to the first item"}
+   "tui.select.last"              {:default-keys ["end"]                 :description "Move selection to the last item"}
+   "tui.settings.cycleBackward"   {:default-keys ["left"]                :description "Cycle the value backward"}
+   "tui.settings.cycleForward"    {:default-keys ["right"]               :description "Cycle the value forward"}})
 
 ;; ─── KeybindingsManager record ─────────────────────────────────────────────
 

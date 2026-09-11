@@ -509,14 +509,11 @@
   (handle-input [this data]
     (let [kmgr (kb/get-global-keybindings)]
       (cond
-        ;; Navigation (pi tui.select.up/down; ctrl+p/ctrl+n are kmet
-        ;; alternate chords, pi has no such extra)
-        (or (kb/matches-key kmgr data "tui.select.up")
-            (keys/matches-key? data (keys/ctrl "p")))
+        ;; Navigation (pi tui.select.up/down; ctrl+p/ctrl+n ride the ids)
+        (kb/matches-key kmgr data "tui.select.up")
         (do (move-selection! this -1) nil)
 
-        (or (kb/matches-key kmgr data "tui.select.down")
-            (keys/matches-key? data (keys/ctrl "n")))
+        (kb/matches-key kmgr data "tui.select.down")
         (do (move-selection! this 1) nil)
 
         (kb/matches-key kmgr data "tui.select.pageUp")

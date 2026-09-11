@@ -901,8 +901,9 @@
               (refilter! this))
             nil)
 
-        ;; label edit (legacy terminals send a bare uppercase letter)
-        (or (match "app.tree.editLabel") (keys/matches-key? data "L"))
+        ;; label edit (app.tree.editLabel also carries the legacy bare-L
+        ;; chord — terminals that send uppercase instead of shift+l)
+        (match "app.tree.editLabel")
         (do (when-let [entry (selected-node)]
               (when-let [cb @on-label-edit-atom]
                 (cb (:id entry) (:label entry))))

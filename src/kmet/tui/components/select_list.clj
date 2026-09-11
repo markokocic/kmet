@@ -227,9 +227,8 @@
           (do (when-let [cb @on-escape] (cb))
               nil)
 
-        ;; Down — pi wraps to the top at the bottom
-          (or (match? data "tui.select.down")
-              (keys/matches-key? data (keys/ctrl "n")))
+        ;; Down — pi wraps to the top at the bottom (ctrl+n rides the id)
+          (match? data "tui.select.down")
           (do (when (pos? n)
                 (if (= selected (dec n))
                   (reset! selected-idx-atom 0)
@@ -237,9 +236,8 @@
                 (notify-selection-change! this filtered n))
               nil)
 
-        ;; Up — pi wraps to the bottom at the top
-          (or (match? data "tui.select.up")
-              (keys/matches-key? data (keys/ctrl "p")))
+        ;; Up — pi wraps to the bottom at the top (ctrl+p rides the id)
+          (match? data "tui.select.up")
           (do (when (pos? n)
                 (if (zero? selected)
                   (reset! selected-idx-atom (dec n))
@@ -261,22 +259,22 @@
               (notify-selection-change! this filtered n)
               nil)
 
-        ;; Home
-          (keys/matches-key? data "home")
+        ;; Home (kmet: tui.select.first)
+          (match? data "tui.select.first")
           (do (reset! selected-idx-atom 0)
               (notify-selection-change! this filtered n)
               nil)
 
-        ;; End
-          (keys/matches-key? data "end")
+        ;; End (kmet: tui.select.last)
+          (match? data "tui.select.last")
           (do (when (pos? n)
                 (reset! selected-idx-atom (dec n))
                 (notify-selection-change! this filtered n))
               nil)
 
-        ;; Backspace — remove last filter char
-          (or (keys/matches-key? data "backspace")
-              (keys/matches-key? data (keys/ctrl "h")))
+        ;; Backspace — remove last filter char (the editor's delete id, so a
+        ;; rebind moves filter editing with it)
+          (match? data "tui.editor.deleteCharBackward")
           (do (swap! filter-atom #(subs % 0 (max 0 (dec (count %)))))
               (reset! selected-idx-atom 0)
               nil)

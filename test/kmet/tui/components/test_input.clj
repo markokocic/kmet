@@ -268,3 +268,10 @@
         (finally
           (kb/set-global-keybindings! prev))))))
 
+(t/deftest test-input-ctrl-h-is-deletecharbackwards-second-chord
+  (t/testing "kitty ctrl+h (CSI-u) is part of tui.editor.deleteCharBackward"
+    (let [inp (input/make-input)]
+      (doseq [c "ab"] (core/handle-input inp (str c)))
+      (core/handle-input inp "\u001b[104;5u")
+      (t/is (= "a" (input/input-get-value inp)) "ctrl+h deletes backward"))))
+

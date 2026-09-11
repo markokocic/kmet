@@ -133,6 +133,27 @@
     (core/handle-input s (str (char 16)))  ;; ctrl+p
     (t/is (zero? @(:selected-idx-atom s)))))
 
+(t/deftest test-select-list-ctrl-p-n-ride-select-up-down
+  ;; ctrl+p/ctrl+n are part of tui.select.up/down's default-keys (kmet vim
+  ;; alternates), so a rebind moves them with the id
+  (let [prev (kb/get-global-keybindings)]
+    (try
+      (kb/set-global-keybindings!
+       (kb/make-keybindings-manager kb/tui-keybinding-defs
+                                    {"tui.select.up" "k"
+                                     "tui.select.down" "j"}))
+      (let [s (sl/make-select-list sample-items)]
+        (core/handle-input s "\u0010")             ;; ctrl+p
+        (t/is (zero? @(:selected-idx-atom s)) "ctrl+p was rebound away")
+        (core/handle-input s "\u000e")             ;; ctrl+n
+        (t/is (zero? @(:selected-idx-atom s)) "ctrl+n was rebound away")
+        (core/handle-input s "j")
+        (t/is (= 1 @(:selected-idx-atom s)) "j moves down")
+        (core/handle-input s "k")
+        (t/is (zero? @(:selected-idx-atom s)) "k moves up"))
+      (finally
+        (kb/set-global-keybindings! prev)))))
+
 ;; ─── Filtering ────────────────────────────────────────────────────────────
 
 (t/deftest test-select-list-filter
@@ -404,4 +425,31 @@
           (t/is (= 3 @(:selected-idx-atom s)) "ctrl+u wraps to the bottom"))
         (finally
           (kb/set-global-keybindings! prev))))))
+
+(t/deftest test-select-list-kmet-extras-resolve-through-the-manager
+  (t/testing "tui.select.first/last (kmet) and deleteCharBackward are ids"
+    (let [prev (kb/get-global-keybindings)]
+      (try
+        (kb/set-global-keybindings!
+         (kb/make-keybindings-manager kb/tui-keybinding-defs
+                                      {"tui.select.first" "ctrl+y"
+                                       "tui.select.last" "ctrl+e"
+                                       "tui.editor.deleteCharBackward" "ctrl+x"}))
+        (let [s (sl/make-select-list sample-items)]
+          (core/handle-input s K-END)
+          (t/is (zero? @(:selected-idx-atom s)) "end was rebound away from select.last")
+          (core/handle-input s "\u0005")
+          (t/is (= 3 @(:selected-idx-atom s)) "ctrl+e jumps to the last item")
+          (core/handle-input s K-HOME)
+          (t/is (not (zero? @(:selected-idx-atom s))) "home was rebound away from select.first")
+          (core/handle-input s "\u0019")
+          (t/is (zero? @(:selected-idx-atom s)) "ctrl+y jumps to the first item")
+          (core/handle-input s "ab")
+          (core/handle-input s "\u007f")
+          (t/is (= "ab" @(:filter-atom s)) "backspace was rebound away")
+          (core/handle-input s "\u0018")
+          (t/is (= "a" @(:filter-atom s)) "ctrl+x removes a filter char"))
+        (finally
+          (kb/set-global-keybindings! prev))))))
+
 

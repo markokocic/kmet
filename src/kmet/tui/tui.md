@@ -708,27 +708,42 @@ sees). Consequences:
   the same table. The editor checks `tui.editor.historyPrevious/Next` after
   interrupt/exit but before the other app actions (pi: custom-editor), so a
   user can bind ctrl+p to history even though it cycles models by default,
-  while escape/ctrl+d still cancel/exit. Two ids are kmet extensions
-  because pi has the action but no binding: `tui.editor.redo` (`ctrl+z`;
-  pi's undo is one-way, and in the app `app.suspend` still owns ctrl+z —
-  app actions dispatch first) and `tui.editor.killLine` (`ctrl+w`, the whole-line
-  kill — the editor tries it before `deleteWordBackward`, which also claims
-  ctrl+w from pi and takes over if the user moves killLine away). The rest
-  of the editor's extras are chord-level aliases, the way pi keeps
-  `shift+backspace`/`shift+delete` next to their ids: `ctrl+h` (backspace),
-  `ctrl+enter`/`alt+enter` (newLine), `ctrl+n`/`ctrl+p` (history, after app
-  actions so model-cycling still wins); the standalone cancel is
-  `tui.select.cancel` (pi's base Editor has no escape leg — its CustomEditor
-  owns `app.interrupt`), and `tui.input.copy` (ctrl+c) hands the key back to
-  the parent, again before any cancel. What remains raw is either pi's own
-  raw matching or a kmet-only extra: pi matches `space` in SettingsList and
-  the config screen, `ctrl+c` in the config/scoped-models screens, and the
-  editor's `shift+backspace`-style aliases; kmet adds `ctrl+n`/`ctrl+p`
-  navigation (SelectList/SettingsList/config screen/editor history),
-  `ctrl+h`/`ctrl+i` aliases, SelectList's `home`/`end` and its
-  `shift+pageUp`/`shift+pageDown` paging (plain pageUp/pageDown scroll the
-  transcript, pi parity), SettingsList's `left`/`right` cycling, the auth
-  selector's `j`/`k`, and the tree's legacy bare-`L` label edit.
+  while escape/ctrl+d still cancel/exit.
+- **The TUI definition table is pi's `TUI_KEYBINDINGS` plus a fixed set of
+  kmet deltas**, all rebindable (one id = all its chords; a user override
+  replaces the whole set):
+  - kmet chords folded onto pi ids: `tui.editor.deleteCharBackward` +=
+    ctrl+h, `tui.input.tab` += ctrl+i, `tui.select.up/down` += ctrl+p/ctrl+n
+    (vim alternates), `tui.input.newLine` += ctrl+enter/alt+enter,
+    `tui.editor.jumpBackward` += ctrl+shift+], `app.tree.editLabel` +=
+    legacy `L` (terminals that send uppercase instead of shift+l);
+    `tui.select.cancel` already carries escape/ctrl+c from pi.
+    A kmet delta that shares a chord with a widget's own app id means the
+    widget must check the specific id first — the scoped-models selector
+    checks `app.models.toggleProvider` (ctrl+p, pi) before navigation.
+  - kmet-only ids (pi has the action without a binding, or the action
+    itself): `tui.editor.redo` (ctrl+z; pi's undo is one-way, and in the app
+    `app.suspend` still owns ctrl+z — app actions dispatch first),
+    `tui.editor.killLine` (ctrl+w, the whole-line kill — the editor tries it
+    before `deleteWordBackward`, which also claims ctrl+w from pi and takes
+    over if the user moves killLine away), `tui.select.first`/`last`
+    (home/end), `tui.settings.cycleBackward`/`cycleForward` (left/right).
+- **What stays raw** is either pi's own raw matching or a deliberately
+  order-dependent kmet extra:
+  - pi raw: `space` (SettingsList, config screen), `ctrl+c` (config and
+    scoped-models screens), `escape` (scoped-models), the auth selector's
+    `j`/`k`, and the editor's `shift+backspace`-style encodings.
+  - kmet extras: SelectList's `shift+pageUp`/`shift+pageDown` paging — a
+    shared def cannot carry it, because matching `tui.select.pageUp`
+    (`pageUp`, pi) would make the list eat the plain chord; the thinking
+    selector's ctrl+c clear-search-then-cancel (it must not run through
+    `tui.select.cancel`, or escape would clear instead of cancel); and the
+    editor's late ctrl+p/ctrl+n history fallback, which fires only after app
+    actions declined the chord (a def would beat `app.model.cycleForward`).
+- The standalone editor cancel is `tui.select.cancel` (pi's base Editor has
+  no escape leg — its CustomEditor owns `app.interrupt`), and
+  `tui.input.copy` (ctrl+c) hands the key back to the parent before any
+  cancel.
 - Widgets implement `handle-input`; dialogs trap keys manually around their
   focused editor.
 
@@ -1028,7 +1043,7 @@ rendering-shaped ones are postponed below.
 | R2 | writable cursor | `kmet.libs.reakt/writable-cursor` + `cursor-reset!`/`cursor-swap!` (§3.1): a tracked-read lens that writes back through its source with `assoc-in`, `=`-gated, nested lenses composing, inert once disposed; read-only `cursor` stays the derivation primitive |
 | P1 | skill invocation message | `kmet.app.skills/parse-skill-block` (the inverse of the expander) + `kmet.app.ui.skill-message` — a `/skill:name` block renders as a collapsible `[skill] name (ctrl+o to expand)` message instead of dumping its body into the transcript |
 | P2 | images in chat (TUI half) | `kmet.app.ui.image_block` + the live `ui.subs/image-settings-sub`: tool-result and user/custom-message images render inline, or as the `imageFallback` text indicator when `:show-images` is off / the terminal lacks support; `:terminal {:show-images :image-width-cells}` in `config.clj` + terminal-support-gated `/settings` rows. The wire half landed separately: `images.blockImages` = `app/loop.clj` (`convertToLlmWithBlockImages`) + an ungated `/settings` row; `images.autoResize` stays provider work (tracked in `alignment.md` §2) |
-| P3 | widget keys through the manager | `kmet.tui.keybindings/global-match?` + the editor's injected-manager `kb-match?` (§7): SelectList, Input, SettingsList and the editor resolve their own ids through the KeybindingsManager, so a user override moves the widget; the editor resolves `tui.editor.historyPrevious/Next` between interrupt/exit and the other app actions (pi: custom-editor order). The TUI definition table was aligned to pi's `TUI_KEYBINDINGS` (`historyPrevious/Next`, `jumpForward/Backward`, `yankPop`, `ctrl+left/right`, `ctrl+home/end`, `ctrl+pageUp/Down`). Follow-up (same day): the remaining unmanaged chords became ids — kmet extensions `tui.editor.redo`/`tui.editor.killLine`, `ctrl+shift+]` folded into `jumpBackward`'s default-keys, the standalone cancel and `tui.input.copy` mapped to `tui.select.cancel`/`tui.input.copy`; the app panels followed (thinking selector's `app.thinking.save` — a pi id kmet was missing — and the config screen's `tui.select.*`/`tui.input.tab` legs, pi's raw space/ctrl+c kept) |
+| P3 | widget keys through the manager | `kmet.tui.keybindings/global-match?` + the editor's injected-manager `kb-match?` (§7): SelectList, Input, SettingsList and the editor resolve their own ids through the KeybindingsManager, so a user override moves the widget; the editor resolves `tui.editor.historyPrevious/Next` between interrupt/exit and the other app actions (pi: custom-editor order). The TUI definition table was aligned to pi's `TUI_KEYBINDINGS` (`historyPrevious/Next`, `jumpForward/Backward`, `yankPop`, `ctrl+left/right`, `ctrl+home/end`, `ctrl+pageUp/Down`). Follow-ups (same day): kmet extension ids `tui.editor.redo`/`tui.editor.killLine`/`tui.select.first`/`tui.select.last`/`tui.settings.cycleBackward`/`tui.settings.cycleForward`; folded alias chords on pi ids (`ctrl+h`, `ctrl+i`, `ctrl+p`/`ctrl+n`, `ctrl+enter`/`alt+enter`, `ctrl+shift+]`, the tree's legacy `L`); the thinking selector's `app.thinking.save` (a pi id kmet was missing) and the config screen's `tui.select.*`/`tui.input.tab` legs (pi's raw space/ctrl+c kept). §7 lists the remaining raw matches and why each stays raw |
 
 ### Plan
 

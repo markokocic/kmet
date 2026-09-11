@@ -282,6 +282,27 @@
     (t/is (= "" (:query @(:state-atom tl))))
     (t/is (true? (:show-label-timestamps @(:state-atom tl))))))
 
+(t/deftest app-tree-editlabel-carries-the-legacy-chord-and-is-rebindable
+  ;; bare L was a widget-local shim for terminals that send uppercase
+  ;; instead of shift+l; it now lives in app.tree.editLabel's default-keys,
+  ;; so a rebind moves it and the tree keeps no raw key matching.
+  (let [seen (atom nil)
+        tl (new-list tree :on-label-edit (fn [id label] (reset! seen [id label])))]
+    (press tl "L")
+    (t/is (some? @seen) "bare L edits the selected entry's label"))
+  (let [seen (atom nil)
+        tl (new-list tree :on-label-edit (fn [id label] (reset! seen [id label])))]
+    (tui-kb/set-user-bindings! (tui-kb/get-global-keybindings)
+                               {"app.tree.editLabel" "ctrl+e"})
+    (try
+      (press tl "L")
+      (t/is (nil? @seen) "rebound away: L is no longer a label edit")
+      (t/is (= "L" (:query @(:state-atom tl))) "…it feeds the search query again")
+      (press tl "\u0005")                       ;; ctrl+e
+      (t/is (some? @seen) "the new chord edits")
+      (finally
+        (tui-kb/set-user-bindings! (tui-kb/get-global-keybindings) {})))))
+
 ;; ─── Horizontal panning ─────────────────────────────────────────────────────
 
 (t/deftest panning-keeps-selected-anchor-readable

@@ -1264,9 +1264,9 @@
           ;; input falls through to normal editing (which refreshes it)
           (and @(:autocomplete-state this) @(:autocomplete-list this)
                (or (kb-match? this data "tui.select.cancel")
-                   (kb-match? this data "tui.select.up") (keys/matches-key? data (keys/ctrl "p"))
-                   (kb-match? this data "tui.select.down") (keys/matches-key? data (keys/ctrl "n"))
-                   (kb-match? this data "tui.input.tab") (keys/matches-key? data (keys/ctrl "i"))
+                   (kb-match? this data "tui.select.up")
+                   (kb-match? this data "tui.select.down")
+                   (kb-match? this data "tui.input.tab")
                    (and (kb-match? this data "tui.select.confirm") (not @disable-submit))))
           (let [sl @(:autocomplete-list this)
                 prefix @(:autocomplete-prefix this)]
@@ -1274,11 +1274,11 @@
               (kb-match? this data "tui.select.cancel")
               (do (cancel-autocomplete this) nil)
 
-              (or (kb-match? this data "tui.select.up") (keys/matches-key? data (keys/ctrl "p"))
-                  (kb-match? this data "tui.select.down") (keys/matches-key? data (keys/ctrl "n")))
+              (or (kb-match? this data "tui.select.up")
+                  (kb-match? this data "tui.select.down"))
               (do (protocols/handle-input sl data) nil)
 
-              (or (kb-match? this data "tui.input.tab") (keys/matches-key? data (keys/ctrl "i")))
+              (kb-match? this data "tui.input.tab")
               (do (apply-selected-completion! this) nil)
 
               (and (kb-match? this data "tui.select.confirm") (not @disable-submit))
@@ -1325,9 +1325,7 @@
           (and (kb-match? this data "tui.input.submit") (not @disable-submit))
           (do (when-let [cb @on-submit] (cb (clojure.string/join "\n" lines))) nil)
 
-          (or (kb-match? this data "tui.input.newLine")
-              (keys/matches-key? data (keys/ctrl "enter"))
-              (keys/matches-key? data (keys/alt "enter")))
+          (kb-match? this data "tui.input.newLine")
           (do (add-new-line this) nil)
 
           ;; pi base editor: Ctrl+C is the copy binding and is handed back
@@ -1346,8 +1344,7 @@
               (when-let [cb @on-submit] (cb nil))
               nil)
 
-          (or (kb-match? this data "tui.editor.deleteCharBackward")
-              (keys/matches-key? data (keys/ctrl "h")))
+          (kb-match? this data "tui.editor.deleteCharBackward")
           (do (handle-backspace this) nil)
 
           (kb-match? this data "tui.editor.deleteCharForward")
@@ -1359,8 +1356,7 @@
           (kb-match? this data "tui.editor.redo")
           (do (handle-redo this) nil)
 
-          (or (kb-match? this data "tui.input.tab")
-              (keys/matches-key? data (keys/ctrl "i")))
+          (kb-match? this data "tui.input.tab")
           (do (handle-tab this) nil)
 
           ;; jumpBackward's kmet chord ctrl+shift+] is part of the id's

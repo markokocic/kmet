@@ -4,7 +4,6 @@
   (:require [clojure.string :as str]
             [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
-            [kmet.tui.keys :as keys]
             [kmet.tui.keybindings :as kb]
             [kmet.tui.utils :as u]
             [kmet.tui.components.editing :as edit]))
@@ -274,8 +273,7 @@
         (do (when-let [cb @on-submit] (cb @value-atom)) nil)
 
         ;; Backspace
-        (or (match? data "tui.editor.deleteCharBackward")
-            (keys/matches-key? data (keys/ctrl "h")))
+        (match? data "tui.editor.deleteCharBackward")
         (do (handle-backspace this) nil)
 
         ;; Forward delete

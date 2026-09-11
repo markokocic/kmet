@@ -138,8 +138,9 @@
 
 (t/deftest test-screen-keys-resolve-through-the-manager
   ;; Follow-up to P3: the screen's navigation/page/confirm/cancel resolve
-  ;; through the global keybindings manager, so user overrides apply. ctrl+p/
-  ;; ctrl+n stay kmet alternate chords; space and ctrl+c stay raw (pi's
+  ;; through the global keybindings manager, so user overrides apply; the
+  ;; kmet ctrl+p/ctrl+n alternates ride tui.select.up/down, so rebinding
+  ;; them moves the alternates too. space and ctrl+c stay raw (pi's
   ;; config-selector matches those raw too).
   (let [dir (make-package (tmp-dir))]
     (with-settings
@@ -169,14 +170,15 @@
               (protocols/handle-input screen "\u0019")        ;; ctrl+y
               (t/is (false? (:enabled (first (item-rows screen))))
                     "ctrl+y toggles the selected item")
-              ;; the raw space toggle and the ctrl+n alternate chord still work
+              ;; space stays a raw toggle (pi), and ctrl+n rides
+              ;; tui.select.down — rebound away with it
               (protocols/handle-input screen " ")
               (t/is (true? (:enabled (first (item-rows screen))))
                     "space stays a raw toggle (pi)")
               (let [before (pkgs/item-key (selected-item screen))]
                 (protocols/handle-input screen "\u000e")      ;; ctrl+n
-                (t/is (not= before (pkgs/item-key (selected-item screen)))
-                      "ctrl+n stays a kmet alternate chord")))
+                (t/is (= before (pkgs/item-key (selected-item screen)))
+                      "ctrl+n was rebound away with tui.select.down")))
             (finally
               (tui-kb/set-user-bindings! kmgr {})))))
       {:user {:packages [dir]}})))

@@ -143,6 +143,26 @@
           filtered (filtered-items st)
           n (count filtered)]
       (cond
+        ;; Provider toggle FIRST: app.models.toggleProvider is ctrl+p (pi) and
+        ;; kmet's tui.select.up carries ctrl+p too, so the specific app action
+        ;; must win over the generic navigation leg (pi's order works only
+        ;; because its select.up is plain "up")
+        (kb/matches-key kmgr data "app.models.toggleProvider")
+        (let [item (when (pos? n) (nth filtered (min (:selected-idx st) (dec n))))]
+          (when-let [m (:model item)]
+            (let [all-ids (:all-ids st)
+                  provider (:provider m)
+                  provider-ids (filterv #(= provider (:provider (get (:model-map st) %)))
+                                        all-ids)
+                  all-on? (every? #(is-enabled? (:enabled-ids st) %) provider-ids)
+                  ids (if all-on?
+                        (clear-all (:enabled-ids st) all-ids provider-ids)
+                        (enable-all (:enabled-ids st) all-ids provider-ids))]
+              (swap! state-atom assoc :enabled-ids ids :dirty true)
+              (when-let [cb @on-change-atom] (cb ids))
+              (scoped-models-refresh! this)))
+          nil)
+
         ;; Navigation (pi tui.select.up/down — wraps; rebuilds the rows so
         ;; the selection arrow moves, pi updateList)
         (kb/matches-key kmgr data "tui.select.up")
@@ -204,23 +224,6 @@
           (swap! state-atom assoc :enabled-ids ids :dirty true)
           (when-let [cb @on-change-atom] (cb ids))
           (scoped-models-refresh! this)
-          nil)
-
-        ;; Toggle the selected model's provider (pi app.models.toggleProvider)
-        (kb/matches-key kmgr data "app.models.toggleProvider")
-        (let [item (when (pos? n) (nth filtered (min (:selected-idx st) (dec n))))]
-          (when-let [m (:model item)]
-            (let [all-ids (:all-ids st)
-                  provider (:provider m)
-                  provider-ids (filterv #(= provider (:provider (get (:model-map st) %)))
-                                        all-ids)
-                  all-on? (every? #(is-enabled? (:enabled-ids st) %) provider-ids)
-                  ids (if all-on?
-                        (clear-all (:enabled-ids st) all-ids provider-ids)
-                        (enable-all (:enabled-ids st) all-ids provider-ids))]
-              (swap! state-atom assoc :enabled-ids ids :dirty true)
-              (when-let [cb @on-change-atom] (cb ids))
-              (scoped-models-refresh! this)))
           nil)
 
         ;; Save to settings (pi app.models.save)

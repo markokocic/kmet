@@ -160,3 +160,35 @@
         (t/is (= "pgup/q" (tui-kb/key-label-text kmgr "app.exit")))
         (finally (cleanup dir))))))
 
+(t/deftest test-kmet-deltas-and-extension-ids-on-pi-tables
+  ;; The TUI table mirrors pi's TUI_KEYBINDINGS plus a fixed set of kmet
+  ;; deltas (chords folded onto pi ids) and kmet-only ids. Pinned here so a
+  ;; rename or drop fails loudly at the manager level; tui.md §7/§14 lists
+  ;; the same set.
+  (let [kmgr (kb/make-agent-keybindings-manager)]
+    (t/testing "folded kmet chords on pi ids"
+      (t/is (= ["backspace" "ctrl+h"] (tui-kb/get-keys kmgr "tui.editor.deleteCharBackward")))
+      (t/is (= ["tab" "ctrl+i"] (tui-kb/get-keys kmgr "tui.input.tab")))
+      (t/is (= ["up" "ctrl+p"] (tui-kb/get-keys kmgr "tui.select.up")))
+      (t/is (= ["down" "ctrl+n"] (tui-kb/get-keys kmgr "tui.select.down")))
+      (t/is (= ["shift+enter" "ctrl+j" "ctrl+enter" "alt+enter"]
+               (tui-kb/get-keys kmgr "tui.input.newLine")))
+      (t/is (= ["ctrl+alt+]" "ctrl+shift+]"] (tui-kb/get-keys kmgr "tui.editor.jumpBackward")))
+      (t/is (= ["escape" "ctrl+c"] (tui-kb/get-keys kmgr "tui.select.cancel")))
+      (t/is (= ["shift+l" "L"] (tui-kb/get-keys kmgr "app.tree.editLabel"))
+            "legacy bare-L encoding rides the id"))
+    (t/testing "kmet-only ids"
+      (t/is (= ["ctrl+z"] (tui-kb/get-keys kmgr "tui.editor.redo")))
+      (t/is (= ["ctrl+w"] (tui-kb/get-keys kmgr "tui.editor.killLine")))
+      (t/is (= ["home"] (tui-kb/get-keys kmgr "tui.select.first")))
+      (t/is (= ["end"] (tui-kb/get-keys kmgr "tui.select.last")))
+      (t/is (= ["left"] (tui-kb/get-keys kmgr "tui.settings.cycleBackward")))
+      (t/is (= ["right"] (tui-kb/get-keys kmgr "tui.settings.cycleForward")))
+      (t/is (= ["ctrl+s"] (tui-kb/get-keys kmgr "app.thinking.save"))
+            "pi id kmet was missing"))
+    (t/testing "user overrides replace the whole chord set"
+      (tui-kb/set-user-bindings! kmgr {"tui.editor.deleteCharBackward" "ctrl+x"})
+      (t/is (= ["ctrl+x"] (tui-kb/get-keys kmgr "tui.editor.deleteCharBackward")))
+      (tui-kb/set-user-bindings! kmgr {}))))
+
+
