@@ -6,8 +6,7 @@
    kmet.ai.proxy namespaces are deleted, so any require of them (or of
    babashka.http-client) fails the build — preventing the abstraction
    from eroding later."
-  (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [deftest is]]
             [babashka.fs :as fs]))
 
 (defn- source-files
@@ -48,10 +47,15 @@
                         (= % 'kmet.ai.proxy)))))))
 
 (defn- spawns-curl?
-  "True when the file invokes curl directly (outside kmet.libs.http)."
+  "True when the file invokes curl directly (outside kmet.libs.http):
+   curl as an argv head (`[\"curl\" ...]`) or the start of a shell string
+   (`curl -sS ...`). A bare mention of the word (prose, test data) is not a
+   spawn."
   [path]
   (and (not= (ns-sym path) 'kmet.libs.http)
-       (str/includes? (slurp path) "\"curl\"")))
+       (let [content (slurp path)]
+         (boolean (or (re-find #"\[\s*\"curl\"" content)
+                      (re-find #"\"curl\s" content))))))
 
 (deftest http-boundary-strict
   (doseq [path (source-files)]
