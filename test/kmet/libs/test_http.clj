@@ -39,8 +39,10 @@
    the headers, and the SAME BufferedReader that consumed the header block
    (a fresh reader on the raw stream would lose buffered body bytes).
    Lines are trimmed before the blank-line check and header values are
-   trimmed: jolt ≤ v0.8.5's readLine kept the trailing \\r (the JVM strips
-   it; fixed upstream in v0.8.6), so a bare (seq l) test would read one line past the header block — and
+   trimmed: jolt's readLine on this path (and its InputStreamReader) keeps
+   the trailing \\r — re-checked on v0.8.6-72-g0f7d1a11, where a socket line
+   \"x\\r\\n\" still reads \"x\\r\" (v0.8.6's fix covered System/in's read-line
+   only) — so a bare (seq l) test would read one line past the header block — and
    Jolt's InputStreamReader pre-buffers the socket, so that extra read
    consumes the response window (curl then times out) — and every parsed
    value would carry a trailing \\r."

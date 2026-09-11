@@ -34,9 +34,12 @@
         ;; (24), while bionic's struct addrinfo is BSD-ordered (32), so
         ;; connect(2) gets a NULL sockaddr and every platform-transport
         ;; request fails EFAULT on Android/Termux (bb-jolt.md JOLT-9). The
-        ;; branch is ONE commit on upstream main 4744256, so reverting is
-        ;; changing the two lines back once the PR merges:
-        ;; https://github.com/jolt-lang/http-client/compare/main...markokocic:fix/bionic-addrinfo
+        ;; branch is ONE commit on upstream main 4744256; the PR is now
+        ;; jolt-lang/http-client#19 (open, **not merged** as of 2026-09-11 —
+        ;; upstream main is still 4744256, re-checked 2026-09-11). Revert
+        ;; these two lines to `jolt-lang/http-client` + the upstream sha once
+        ;; it merges:
+        ;; https://github.com/jolt-lang/http-client/pull/19
         io.github.jolt-lang/http-client {:git/url "https://github.com/markokocic/http-client.git"
                                          :git/sha "4958c9d2730f05078143ed3f2b194b19aa8d0ba2"}
         ;; kmet's own RFC 0014 provider lib (jolt/ dir): the JDK classes the

@@ -12,7 +12,13 @@ below are jolt-only hooks.
 `Signature` / `KeyPairGenerator` / `KeyFactory` for RSA (and EC) and claims
 those classes itself. What remains here is what the jolt runtime lacks and
 crypto does not cover: `java.util.Base64/getMimeDecoder` and the
-`java.net.http.HttpTimeoutException` ctor.
+`java.net.http.HttpTimeoutException` ctor. **Re-verified 2026-09-11 on
+upstream main (`v0.8.6-72-g0f7d1a11`, locally built):** both are still
+missing without this provider — a bare `(java.util.Base64/getMimeDecoder)`
+answers `No matching field or method: java.util.Base64/getMimeDecoder` and
+a bare `(java.net.http.HttpTimeoutException. "x")` answers
+`No matching ctor found for class java.net.http.HttpTimeoutException` — so
+the lib stays as is.
 
 ## No `jolt.crypto` require (dropped 2026-09-10)
 

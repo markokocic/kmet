@@ -189,9 +189,9 @@ methods: `.indexOf`, `.getBytes`, java.time chains), and loaded libraries do
 too (cljfmt 0.16.5: `java.io.File` in 3 of its 12 sources). No `.-field`
 access anywhere in the corpus (0 hits).
 
-**FIXED on a jolt branch (`agent/sci-reflector`, commit `847d9499` on main
-`684f6ea0`, 2026-09-11 — pushed to `markokocic/jolt`, CHANGELOG-free, also
-stacked in its `patchset` branch; upstreamed for review, not merged yet).**
+**MERGED upstream — jolt PR #933 (commit `847d9499`, merge `0f7d1a11`,
+`v0.8.6-72`+, unreleased after v0.8.6; the PR carries the changelog entry
+`937c8c1f`).**
 The clean fix needed no
 SCI patch and no shadow: jolt registers the lookup SCI actually calls,
 `clojure.lang.Reflector/getMethods`, plus the two companions the same path
@@ -228,7 +228,8 @@ object change, 2× `/tmp/jolt-spit` from the environment) at the same
 5494/5513 on `origin/main` without the patch, so none are attributable to
 it. `make smoke`/`make loaderconf` need a built binary, and `make testbin`
 cannot link on this Termux toolchain (system-Chez iconv), unrelated to
-source. If upstream declines the branch, the fallback stays a ~30-line
+source. Upstream merged the branch (PR #933), so the fallback stays
+unwritten; it had been a ~30-line
 jolt-side shadow of `sci.impl.reflector` on a jolt-only root (verified
 too: `sci/impl/reflector.clj` with `get-methods` → one-element `ArrayList`
 sentinel carrying the class, `maybe-fi-method` → nil, `box-arg` →
@@ -264,7 +265,7 @@ matter.
 | M1 | `clojure.data.json` (the swap from `cheshire` → `data.json` is done — `kmet.libs.json` now aliases `clojure.data.json` directly) | **RESOLVED 2026-09-09 — no JSON lib needed:** `org.clojure/data.json` is a `deps.edn` Maven dep and Jolt resolves Maven deps itself, so `kmet.libs.json` loads unchanged on Jolt. Verified green on Jolt `v0.8.5`: `test-json` (4 tests/18 assertions), `test-jsonrpc` (17/41), `test-sse` (33/109). **Note:** `http.cljc` is already ported (curl path via `#?(:jolt ...)`); all 27 libs now load and test green on bb/JVM. M1 is closed (data.json works on both hosts) | done — no new lib |
 | M2 | `tui/terminal.clj` (JLine raw/timed-reads/size) + `core.clj` reader/timers/resize/drain | termios FFI (Unix) + kernel32 FFI (Windows); `future` reader + `locking` + gen-counters — see `jolt-tui.md` §§4–7,9. Evaluated 2026-09-06: `jolt-lang/glimmer-tui` (ncursesw via FFI, Unix-only, fullscreen `initscr` takeover) rejected — wrong architecture for the inline ANSI/scrollback model; JLine stays on bb (`jolt-tui.md` §2 decision) | rewrite ~500 LOC (Jolt only) |
 | M3 | `libs/crypto.clj` (315 LOC: RSA/EC `KeyFactory`, `SHA256withRSA/ECDSA` `Signature`) + `libs/aws_sigv4.clj` (213 LOC: `MessageDigest` SHA-256, `Mac` HmacSHA256, `HexFormat`, `Normalizer`?) — grep the exact class list before the FFI design | OpenSSL FFI following `mvn_http.clj`'s libcrypto/libssl loading (note macOS boringssl SIGABRT hazard — explicit Homebrew paths only); RSA via libcrypto; `SecureRandom` via OS source. The `io.github.jolt-lang/crypto` git dep is in `deps.edn` (RFC 0014). **Verified 2026-09-09:** the symmetric half holds — `test-aws-sigv4` fully green on Jolt (5 tests/18 assertions), so `MessageDigest`/`Mac` are covered. The asymmetric half still gaps — `test-crypto` on Jolt: 10 tests, 2 pass, 8 fail in key-parse/sign paths: `KeyPairGenerator` has no provider (`No dependency provides java.security.KeyPairGenerator … :jolt/provides … (RFC 0014)`), `Base64/getMimeDecoder` is unshimmed (PEM/PKCS parse), and JWK hits `No matching field found: toByteArray for class java.lang.Long`. The `Base64/getMimeDecoder` half is now covered by kmet's own `jolt/` provider lib (§9). Re-verified in the 2026-09-09 full-suite run (§8): 10 tests, 2 pass, 1 failure (`test-parse-private-key-rejects-garbage` — `getMimeDecoder`) + 7 errors (4× `getMimeDecoder`, 2× JWK `toByteArray`-on-Long, 1× `KeyPairGenerator`); the same `KeyPairGenerator` gap surfaces in `ai.test-google-adc` (service-account flow) and `libs.test-oauth/test-jwt-bearer-token`. **CLOSED 2026-09-10:** RSA landed in jolt.crypto (merged upstream as jolt-lang/crypto#8, merge `79ecb3d` — keygen + `SHA*withRSA` + `KeyFactory`), the JWK `.toByteArray` gap landed in `kmet.libs.crypto/bigint->bytes`, and `test-crypto` is fully green on Jolt (10 tests/21 assertions) | done (jolt.crypto + kmet.libs.crypto) |
-| M4 | `libs/oauth.clj` (611) + `ai/oauth.clj` (1012) + `ai/google_adc.clj` (121) — browser launch, localhost callback server, token cache | `ServerSocket` shim exists (`stdlib/jolt/socket.clj`, gated on `(require 'jolt.socket)`); browser launch via `jolt.process`; token cache via `spit`/`slurp`. **Verified 2026-09-09:** `test-oauth` on Jolt: 26 tests, 1 failure + 1 error — `test-callback-server` times out (localhost callback; `ServerSocket` shim is gated on `(require 'jolt.socket)`) and `test-jwt-bearer-token` fails on the M3 `KeyPairGenerator` gap. **Callback server FIXED** (commit `596f439`, 2026-09-09: jolt's `readLine` kept the trailing `\r`, so the header-block end arrived as `"\r"` — truthy — and the reader blocked one line past the headers forever; plus a socket-shim read gap); re-verified in the full-suite run (§8): 26 tests/65 assertions, **1 error only** (`test-jwt-bearer-token`, M3). **Upstream v0.8.6 (verified 2026-09-10):** jolt's `readLine` now strips the trailing `\r` (blank line reads `""`), and JOLT-1 is fixed — `ai.test-oauth` is 53 tests/223 assertions fully green on jolt. kmet's `str/trim` emptiness check and 3-arg socket `write` STAND (portable, identical on both hosts — and the 2-arg `write(byte[])` still throws on jolt's SocketOutputStream, verified 2026-09-10). | adapt ~1.7k LOC |
+| M4 | `libs/oauth.clj` (611) + `ai/oauth.clj` (1012) + `ai/google_adc.clj` (121) — browser launch, localhost callback server, token cache | `ServerSocket` shim exists (`stdlib/jolt/socket.clj`, gated on `(require 'jolt.socket)`); browser launch via `jolt.process`; token cache via `spit`/`slurp`. **Verified 2026-09-09:** `test-oauth` on Jolt: 26 tests, 1 failure + 1 error — `test-callback-server` times out (localhost callback; `ServerSocket` shim is gated on `(require 'jolt.socket)`) and `test-jwt-bearer-token` fails on the M3 `KeyPairGenerator` gap. **Callback server FIXED** (commit `596f439`, 2026-09-09: jolt's `readLine` kept the trailing `\r`, so the header-block end arrived as `"\r"` — truthy — and the reader blocked one line past the headers forever; plus a socket-shim read gap); re-verified in the full-suite run (§8): 26 tests/65 assertions, **1 error only** (`test-jwt-bearer-token`, M3). **Upstream v0.8.6 + main (re-verified 2026-09-11):** JOLT-1 is fixed and `ai.test-oauth` is 53 tests/223 assertions fully green on jolt, but the `readLine` claim was too broad: v0.8.6's fix covers `System/in`'s `read-line`, not the `BufferedReader`/`InputStreamReader` path the callback server uses — on `v0.8.6-72-g0f7d1a11` a socket line `"x\r\n"` still reads `"x\r"` (probed 2026-09-11; same for the ByteArrayInputStream construction), so kmet's `str/trim` emptiness check is LOAD-BEARING and stays. The 3-arg socket `write` stands too (portable, identical on both hosts — the 2-arg `write(byte[])` still throws on jolt's SocketOutputStream, verified 2026-09-10). | adapt ~1.7k LOC |
 | M5 | `libs/archive.clj` (46 LOC, `ZipFile` read) + `sse.clj` CRC-32 (pure-Clojure `libs/hash.clj/crc32` since the port — Bedrock frame tests green on Jolt, no zip work) + `extensions.cljc:910,921` (`JarFile` probes) + `build.cljc:227,245,389` (`ZipOutputStream` uberjar/pack-extension). (`ai/models.clj` needs no zip work — catalogs load via `io/resource`, which answers file:/jar:/embedded URLs alike.) | `jolt.fs` explicitly EXCLUDES zip/gzip (`stdlib/jolt/fs.clj:12`: "java.util.zip not shimmed yet"). **DECIDED 2026-09-08: bb-only until the `jolt build` rewrite** — `build.cljc`/`libs/archive.clj` entry points throw `::bb-only` under Jolt, their tests carry `^:bb-only` (the runner skips them there); zip/jar work defers to extension-jar materialization via unzip (jolt's own mvn-jar model) | rewrite build; archive via FFI or subprocess. Note:
 | M6 | `build.cljc` uberjar assembly (`bcp/get-classpath`, `ZipOutputStream` resource listing) + model-catalog embedding | No classpath concept; `jolt build` embeds source roots differently. Model catalogs (`ai/model_data/` + manifest) become embedded resources — `io.ss` has `register-embedded-resource!` and `io/resource` answers a `java.net.URL` from both disk and a built image | adapt ~200 LOC |
 | M7 | `libs/clipboard.clj`, `libs/terminal_image.clj` (Base64 — shimmed, keep), OSC-52/kitty-graphics emit | clipboard via platform subprocesses (`pbcopy`/`xclip`/`clip`) through `jolt.process`; image protocols are pure emit logic | small |
@@ -304,7 +305,7 @@ that depended on M1. Jolt side (re-verified 2026-09-09, `jolt v0.8.5`): **json/j
 | `hash` | 🟢 | 🟢 | pure, works |
 | `highlight` | 🟢 | 🟢 | tests pass (139/139) |
 | `hooks` | 🟢 | 🟢 | pure, works |
-| `http` | 🟢 | 🟡 | **ported** — Jolt runs direct/http-proxy traffic through babashka.http-client over the jolt-lang/http-client shims (deps.edn: org.babashka/http-client 0.4.24 + io.github.jolt-lang/http-client), curl for SOCKS/https-scheme proxies and `:as :stream` (see B1); the `:http-transport` setting can force curl for everything. test-http 25/90 green on Jolt (every contract under both modes) — **the platform transport needs both bionic fixes**: the `ai_addr` offset (bb-jolt.md JOLT-9), which comes from the `markokocic/http-client` fork pin in deps.edn until its PR merges, and the `errno` accessor (JOLT-8), which needs the locally built jolt with the `fix/bionic-errno` patch (`patchset` branch) since it is a runtime fix. Both pre-exist the #926/#927 rebase. Loads on bb |
+| `http` | 🟢 | 🟡 | **ported** — Jolt runs direct/http-proxy traffic through babashka.http-client over the jolt-lang/http-client shims (deps.edn: org.babashka/http-client 0.4.24 + io.github.jolt-lang/http-client), curl for SOCKS/https-scheme proxies and `:as :stream` (see B1); the `:http-transport` setting can force curl for everything. test-http 25/90 green on Jolt (every contract under both modes) — **the platform transport needs both bionic fixes**: the `ai_addr` offset (bb-jolt.md JOLT-9), which comes from the `markokocic/http-client` fork pin in deps.edn until its PR merges, and the `errno` accessor (JOLT-8), fixed upstream in jolt PR #939 (`v0.8.6-67`+) — any stock main/release build carries it, the local `patchset` build is no longer needed (re-verified 2026-09-11 on `v0.8.6-72-g0f7d1a11`). Both pre-exist the #926/#927 rebase. Loads on bb |
 | `json` | 🟢 | 🟢 | Jolt 2026-09-09: 4 tests/18 assertions green — data.json resolves via deps.edn (M1 closed) |
 | `jsonrpc` | 🟢 | 🟢 | Jolt 2026-09-09: 17 tests/41 assertions green (M1 closed) |
 | `markdown` | 🟢 | 🟢 | tests pass (137/137) |
@@ -502,6 +503,19 @@ same-day kmet-side workarounds for causes 2/4/7 brought it to 11 F + 16 E;
 the v0.8.6 release closed causes 5–8 with no kmet change; the final two
 workarounds + the crypto RSA port closed the remaining 11.
 
+**Re-verification on upstream main (2026-09-11, `v0.8.6-72-g0f7d1a11`,
+built locally):** the suite is not green on main for an unrelated reason —
+`kmet.app.loop/retryable-error?` hangs jolt's regex engine on its 50-alt
+`retryable-error-regex` (bb-jolt.md JOLT-10), so `kmet.ai.test-llm` hits
+the runner's 15 s per-namespace timeout and its cancellation cascades into
+spurious errors in later namespaces. Isolated re-runs of every other red
+namespace are green: `libs.test-http` 25/90 plus the slow
+platform-transport test, `ai.test-oauth` 53/223,
+`app.ui.test-session-selector` 31/130, `libs.test-edn-store` 17/40. The
+upstream fixes merged in this window (bionic-errno PR #939, spawn-fd PR
+#936, sci-reflector PR #933) are verified; JOLT-6/JOLT-8 are closed,
+JOLT-9 still needs the http-client fork pin (PR #19 open).
+
 ---
 
 ## 9. `jolt/` — kmet's RFC 0014 provider lib
@@ -603,6 +617,14 @@ the provider here is Base64 MIME + `HttpTimeoutException` only, and its
 `jolt.crypto` require is gone with the last-wins re-registration that
 justified it (see the load-order section above).
 
+**Re-verified 2026-09-11 on upstream main (`v0.8.6-72-g0f7d1a11`):** both
+shims are still unshimmed upstream — a bare
+`(java.util.Base64/getMimeDecoder)` answers
+`No matching field or method: java.util.Base64/getMimeDecoder` and a bare
+`(java.net.http.HttpTimeoutException. "x")` answers
+`No matching ctor found for class java.net.http.HttpTimeoutException`,
+while the kmet suite loads them through this provider. Nothing to remove.
+
 ### Roadmap — CLOSED 2026-09-10 (full jolt suite green)
 
 - **Load-order dependence (jolt#914)** — fixed upstream in **PR #924**
@@ -638,3 +660,10 @@ workaround-free kmet passes on both hosts (`kmet.test-utils` +
 green under jolt and bb). Line counts for the
 crypto change: ~90 lines of implementation + ~120 lines of tests, verified
 against OpenSSL-generated known-answer vectors.
+
+**Status on upstream main (2026-09-11):** the green result above is on the
+v0.8.6-series builds (`patchset` tip and earlier). On the freshly built
+`v0.8.6-72-g0f7d1a11` the suite is red for one reason only — the JOLT-10
+regex hang in `kmet.ai.test-llm` and the timeout-cancel cascade it causes
+(§8's re-verification note has the numbers; every affected namespace is
+green when re-run alone).

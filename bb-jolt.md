@@ -2,9 +2,9 @@
 
 Field reports of Clojure-semantics bugs in Jolt (first observed on
 `jolt v0.8.5-36-gbac15682`, threaded Chez 10.x, 2026-09; re-verified on
-`jolt v0.8.6-55-ga2a51bde`, 2026-09-11 — JOLT-1..JOLT-5 and JOLT-7 are
-fixed upstream; JOLT-6, JOLT-8 and JOLT-9 are open, the last two
-Android/bionic-only), each with a minimal
+`jolt v0.8.6-72-g0f7d1a11` — upstream main, locally built, 2026-09-11:
+JOLT-1..JOLT-8 are fixed upstream; JOLT-9 is open (fork pin, PR
+jolt-lang/http-client#19) and Android-only; JOLT-10 is new), each with a minimal
 repro, the expected
 Clojure/babashka behavior, and the kmet test it broke.
 All were discovered by running kmet's test suite under Jolt (`jolt test`);
@@ -248,12 +248,17 @@ runs fail with `java.io.IOException: bind failed on port 54603` etc.
 until manually cleaned (`pkill -f "curl -sS -N"`). Affected:
 `kmet.ai.test-oauth` fixed-port tests under repeated/consecutive runs.
 
-**Status:** open. kmet-side: the runner could kill the process group of
-an interrupted ns (the curl children are setsid'd group leaders — see
-`kmet.libs.http`), but the fd inheritance itself needs a Jolt fix
-(CLOEXEC on spawn). Re-run 2026-09-10 (`v0.8.6-18-g64bdeff4`): still no
-manifestation — the full suite completed with no ns timeout, so no orphan
-cascade was observed.
+**Status:** FIXED upstream — jolt PR #936 (commit `803d8743`, merge
+`bebe765f`, `v0.8.6-55`+, unreleased after v0.8.6). The spawn now closes
+every descriptor above the stdio pair in the child
+(`posix_spawn_file_actions_addclosefrom_np` where it resolves, an
+enumerated `/proc/self/fd` close-action list elsewhere). Verified
+2026-09-11 on the built `v0.8.6-72-g0f7d1a11`: bind a listener, spawn a
+child (`sh -c 'sleep 3'`), close the listener — the port can be rebound
+immediately, while the child is still alive. An orphaned child no longer
+pins a callback port, so kmet's suggested side of the fix (the runner
+killing an interrupted ns's process group) was never applied and is not
+needed.
 
 ---
 
@@ -340,15 +345,18 @@ adds `__errno` to `host/chez/java/process.ss`'s `proc-errno-loc` fallback
 chain (on bionic it was `#f`, so `proc-errno` read 0 and the EINTR retries
 around `waitpid`/read/write never fired).
 
-**Status:** fix prepared upstream — the maintained container is the
-**`patchset` branch** (tip `b36ef75f`, CHANGELOG-free) on `markokocic/jolt`,
-alongside the single-patch `fix/bionic-errno` (`a4261e4d`, one commit on
-jolt main `684f6ea0`). Open a PR from either at
-<https://github.com/jolt-lang/jolt/compare/main...markokocic:jolt:patchset?expand=1>
-(patch + PR body in `~/tmp/jolt-bionic-patches/`). Not filed yet (the
-available token cannot create issues/PRs upstream). Pre-existing: the same
-probe at `v0.8.6-32-gc4ebc570` (source mode, `bin/jolt`) throws the same
-`no entry for "__errno_location"`, so this is not a regression from the
+**Status:** FIXED upstream — jolt PR #939 (merge `3f7fc672`: `a4261e4d`
+"Bionic's errno accessor is `__errno`, not glibc's `__errno_location`",
+`96c278a2` "Cache the errno accessor, not the pointer it returns",
+changelog `ae4a7478`, `v0.8.6-67`+, unreleased after v0.8.6). Verified
+2026-09-11 on the built `v0.8.6-72-g0f7d1a11`: `(p/errno)` answers `2` on
+Termux. **The local `patchset` branch (`b36ef75f`) is redundant** — its
+content is upstream with different shas — and a stock main build (or any
+build ≥ `v0.8.6-67`) now serves every kmet jolt run; no kmet-side
+workaround existed (kmet reads errno only through
+jolt-lang/http-client's recv path). Pre-existing note: the same probe at
+`v0.8.6-32-gc4ebc570` (source mode, `bin/jolt`) throws the same
+`no entry for "__errno_location"`, so this was not a regression from the
 #926/#927 rebase.
 
 ---
@@ -400,21 +408,81 @@ leaves the socket unconnected, `poll(POLLOUT)` reports it writable, and
 whose first two bytes are `AF_INET` (2) or `AF_INET6` (10); the BSD order
 (32) otherwise, cached after the first probe.
 
-**Status:** fix pushed upstream for review — branch `fix/bionic-addrinfo`
-(commit `4958c9d`, based on http-client main `4744256`) on the
-`markokocic/http-client` fork, and **kmet's deps.edn now depends on that
-fork** until the PR merges (the `io.github.jolt-lang/http-client` entry
-under `org.babashka/http-client`; revert those two lines to
-`jolt-lang/http-client` + upstream sha once merged). The upstream PR is
-**not created yet** (the available token has no write permission): use the
-pre-filled link in `~/tmp/jolt-bionic-patches/pr-http-client-addrinfo.url`
-(<https://github.com/jolt-lang/http-client/compare/main...markokocic:fix/bionic-addrinfo?expand=1>,
-title + body pre-filled; body source `pr-http-client-addrinfo.md`).
-The hand patch that used to sit in the gitlibs checkout of upstream
+**Status:** open — the PR now exists: **[jolt-lang/http-client#19](https://github.com/jolt-lang/http-client/pull/19)**
+"Resolve ai_addr's offset from the libc, not from os.name" (branch
+`fix/bionic-addrinfo`, commit `4958c9d`, based on http-client main
+`4744256`; created 2026-09-11, **not merged** as of 2026-09-11 —
+upstream main is still `4744256`). **kmet's deps.edn depends on the
+`markokocic/http-client` fork** until it merges (the
+`io.github.jolt-lang/http-client` entry under `org.babashka/http-client`;
+revert those two lines to `jolt-lang/http-client` + upstream sha once
+merged). The hand patch that used to sit in the gitlibs checkout of upstream
 `4744256...` was **removed** when the fork pin landed (that checkout is
 pristine again — the fork is the single source of the fix). With it:
-`kmet.libs.test-http`
-25 tests / 90 assertions green (was 4F + 10E), `kmet.ai.test-oauth` green,
-`kmet.app.ui.test-session-selector` 31/130 green (was 4F). Pre-existing:
+`kmet.libs.test-http` 25/90 green, the slow platform-transport test green,
+`kmet.ai.test-oauth` 53/223 and `kmet.app.ui.test-session-selector` 31/130
+green (all re-run on `v0.8.6-72-g0f7d1a11`, 2026-09-11). Pre-existing:
 the same connect at `v0.8.6-32-gc4ebc570` (source mode, `bin/jolt`) fails
 with errno 14 too, so this is not a regression from the #926/#927 rebase.
+
+---
+
+## JOLT-10 — `re-find` stops returning on a large alternation carrying two `.*` branches
+
+**Area:** `host/chez/regex.ss` — the irregex search behind `re-find` /
+`java.util.regex.Pattern` (a whole alternation is handed to irregex as one
+pattern).
+
+**Repro (built `v0.8.6-72-g0f7d1a11`, Termux):**
+
+```clojure
+(require '[kmet.app.loop :as loop])
+(loop/retryable-error? "HTTP 500: ext_proc failed: no more response messages")
+;; never returns — killed at 12 s / 30 s; repeated 8/8
+
+;; the same pattern alone; the input is irrelevant (the no-match "zzz" hangs too)
+(re-find @#'loop/retryable-error-regex "HTTP 500")
+```
+
+The pattern is kmet's `retryable-error-regex` (`kmet.app.loop`): 50
+alternatives, 589 chars, `(?i)`, two of them unbounded —
+`upstream.*unavailable` and `stream error: .*closed`. Bisecting the union:
+a 35-alternative prefix answers `:hit 500` in milliseconds; the full 50
+never return, and 39–40-alternative prefixes hung on re-runs (the exact
+boundary is not stable across probes). Deleting **either** `.*`
+alternative fixes it; replacing one `.*` with a literal fixes it. A
+same-size union of plain literals, or a small union with the same two
+`.*` branches, is fast — the blowup needs a large union *and* multiple
+`.*` branches, and it is not about `(?i)` (the pattern without it hangs
+too).
+
+**Expected vs actual:** the JVM's `re-find` answers instantly (`500`).
+On jolt, `v0.8.6-18-g64bdeff4` in source mode (`bin/jolt`) answered
+`:hit 500` in under a second (2026-09-11 probe), while the built
+`v0.8.6-54-g684f6ea0` and `v0.8.6-72-g0f7d1a11` never return — so the
+pathology appeared between `-18` and `-54`, not with the
+sci-reflector/errno patches (a surgical revert of #922's new
+`irregex-search` end-argument did not fix it). A source-mode bisect
+across the range gave non-monotonic answers (source mode reuses its
+compile cache across checkouts, mixing stale `.so` files), so the next
+step is a built-binary bisect between `64bdeff4` and `684f6ea0`.
+
+**kmet impact:** `retryable-error?` is on the retry-classification path.
+`ai.test-llm/test-llm-transport-error-message` calls it and the namespace
+hits the runner's 15 s per-namespace limit (13 tests / 52 assertions
+done); the runner's `future-cancel` then interrupted an in-flight
+namespace load, which cascaded — `ai.test-model-data` also timed out and
+`libs.test-http` / `ai.test-oauth` reported `Invalid leading character: @`
+while loading http-client's `net.clj` (only after a cancel; those
+namespaces are green when re-run individually, e.g. `test-http` 25/90 and
+the slow transport test, `test-oauth` 53/223). Full non-slow run on main,
+2026-09-11: 2124 tests / 14128 assertions, **10 F + 23 E**, every red
+traceable to this timeout or to the cascade (two were load flakes that
+passed isolated).
+
+**Status:** open, not filed upstream yet — the repro above is
+self-contained. Workaround candidates if the engine is not fixed: split
+the alternation so the two `.*` branches are matched separately (or
+replaced by `str/includes?`), or raise the runner's per-namespace timeout
+(the cancellation itself is what turns the timeout into spurious errors).
+kmet has applied no side change so far.
