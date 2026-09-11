@@ -264,6 +264,31 @@
       (t/is (not (str/includes? content "\uFFFD")) "no replacement char")
       (t/is (<= (bash-exec/byte-length content) 10) "output fits byte limit"))))
 
+(t/deftest test-bash-executor-streaming-utf8-decode
+  (t/testing "a multi-byte char split across reads reassembles (pi TextDecoder stream: true)"
+    ;; execute-bash decoded the stream with the JVM CharsetDecoder, which
+    ;; Jolt does not implement (no CodingErrorAction, no .decode) — the
+    ;; portable decoder carries a split sequence into the next read.
+    (let [feed (fn [chunks]
+                 (:output
+                  (bash-exec/execute-bash
+                   {:command "noop"
+                    :operations (fn [{:keys [on-data]}]
+                                  (doseq [c chunks] (on-data c 0 (alength c)))
+                                  {:exit-code 0})})))
+          text "héllo → 日本語 ünïcode ∂ßπ"
+          bs (.getBytes text "UTF-8")]
+      (doseq [size [1 2 3 5]]
+        (t/is (= text (feed (mapv (fn [i]
+                                    (java.util.Arrays/copyOfRange
+                                     bs i (min (alength bs) (+ i size))))
+                                  (range 0 (alength bs) size))))
+              (str "split size " size)))
+      (t/is (= "A\uFFFDB" (feed [(byte-array [0x41 (unchecked-byte 0xFF) 0x42])]))
+            "invalid bytes decode to U+FFFD, not throw")
+      (t/is (= "\uFFFD" (feed [(byte-array [(unchecked-byte 0xE4)])]))
+            "a stranded lead byte at EOF flushes as U+FFFD"))))
+
 (t/deftest test-tool-unknown
   (let [result (tools/execute-tool "unknown-tool" {})]
     (t/is (:is-error result))

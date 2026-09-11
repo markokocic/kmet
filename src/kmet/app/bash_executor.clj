@@ -57,6 +57,30 @@
             sliced (java.util.Arrays/copyOfRange bs start n)]
         (String. sliced "UTF-8")))))
 
+(defn- utf8-complete-end
+  "Index one past the last COMPLETE UTF-8 sequence in BUF[START,END). Bytes
+   from the returned index to END are a multi-byte sequence whose
+   continuation bytes have not arrived yet — a read boundary is not a
+   character boundary, so the caller carries them into the next chunk.
+   Malformed tails (an invalid continuation, four or more stray continuation
+   bytes, an invalid lead) are not carried: they are left for the host's
+   UTF-8 conversion to replace."
+  [buf start end]
+  (loop [i (dec end), cont 0]
+    (cond
+      (< i start) end
+      (> cont 3) end
+      (= 0x80 (bit-and (aget buf i) 0xC0)) (recur (dec i) (inc cont))
+      :else
+      (let [b (bit-and (aget buf i) 0xFF)
+            need (cond
+                   (< b 0x80) 1
+                   (< b 0xE0) 2
+                   (< b 0xF0) 3
+                   (< b 0xF8) 4
+                   :else 1)]
+        (if (< end (+ i need)) i end)))))
+
 (def ^:private ANSI-PATTERN
   #"\u001b\[[0-9;]*[a-zA-Z]|\u001b\][^\u0007\u001b\u009c]*(?:\u001b\\|\u0007|\u009c)")
 (defn- strip-ansi [s] (str/replace s ANSI-PATTERN ""))
@@ -216,18 +240,23 @@
                                  [setsid shell "-c" command]
                                  [shell "-c" command]))
             proc-opts {:dir cwd :err :pipe :out :pipe :env env
-                       ;; Pi: stdio [pipe|ignore, pipe, pipe] — stdin is a pipe
-                       ;; only for the -s transport (the command is written to
-                       ;; it); otherwise it's redirected from /dev/null so a
-                       ;; command that reads stdin (e.g. bare `cat`) hits EOF
-                       ;; instead of inheriting the TTY and deadlocking the TUI.
-                       :in (if use-stdin?
-                             :pipe
-                             (fs/file (if process/windows-os? "NUL" "/dev/null")))}
+                       ;; Pi: stdio [pipe|ignore, pipe, pipe] — stdin is always
+                       ;; a pipe; the -s transport writes the command to it,
+                       ;; the rest close it right after spawn so a command
+                       ;; that reads stdin (e.g. bare `cat`) hits EOF instead
+                       ;; of inheriting the TTY and deadlocking the TUI. An
+                       ;; empty closed pipe, not a NUL//dev/null redirect:
+                       ;; Jolt's ProcessBuilder.redirectInput(File) is a
+                       ;; no-op, so the redirect silently came back as an
+                       ;; inherited TTY there and `cat` hung.
+                       :in :pipe}
             p (proc/process shell-args proc-opts)
-            ;; Pi: write command to stdin for WSL -s transport
-            _ (when (and use-stdin? (:in p))
-                (try (spit (:in p) command) (catch Exception _ nil))
+            ;; Pi: write command to stdin for WSL -s transport; closing on
+            ;; both transports is what turns stdin into the EOF of pi's
+            ;; stdio `ignore`.
+            _ (when (:in p)
+                (when use-stdin?
+                  (try (spit (:in p) command) (catch Exception _ nil)))
                 (try (.close (:in p)) (catch Exception _ nil)))
             pid (try (-> p :proc .pid) (catch Exception _ nil))
             _ (when pid (process/track-pid! pid))
@@ -368,33 +397,38 @@
                    (catch Exception e
                      (debug/log "bash chunk callback: " e))))))
 
-        ;; Pi: streaming UTF-8 decoder (TextDecoder with {stream: true})
-        utf8-decoder
-        (let [cs (java.nio.charset.Charset/forName "UTF-8")
-              d (.newDecoder cs)]
-          (.onMalformedInput d java.nio.charset.CodingErrorAction/REPLACE)
-          (.onUnmappableCharacter d java.nio.charset.CodingErrorAction/REPLACE)
-          d)
+        ;; Pi: streaming UTF-8 decoder (TextDecoder with {stream: true}).
+        ;; The JVM CharsetDecoder is not an option on Jolt (no
+        ;; CodingErrorAction, no .decode/.onMalformedInput), so the stream is
+        ;; reassembled from complete sequences instead: CARRY holds the ≤3
+        ;; bytes of a sequence split across reads, and each completed run
+        ;; decodes through the host's own UTF-8 conversion (malformed bytes
+        ;; become U+FFFD — the textual equivalent of REPLACE).
+        carry
+        (atom nil)
 
         decode-chunk
-        (fn [raw-bytes offset len end-of-input?]
-          (let [in-buf (java.nio.ByteBuffer/wrap raw-bytes offset len)
-                ;; Allocate generous output buffer (UTF-8 max 4 bytes/char → len * 2 is safe)
-                out-buf (java.nio.CharBuffer/allocate (max 64 (* len 2)))
-                _ (.decode utf8-decoder in-buf out-buf end-of-input?)
-                pos (.position out-buf)]
-            (when (pos? pos)
-              (String. (.array out-buf) 0 pos))))
+        (fn [raw-bytes offset len]
+          (let [pending @carry
+                pending-len (if pending (alength pending) 0)
+                buf (if (zero? pending-len)
+                      raw-bytes
+                      (let [b (byte-array (+ pending-len len))]
+                        (System/arraycopy pending 0 b 0 pending-len)
+                        (System/arraycopy raw-bytes offset b pending-len len)
+                        b))
+                start (if (zero? pending-len) offset 0)
+                end (+ start pending-len len)
+                cut (utf8-complete-end buf start end)]
+            (reset! carry (when (< cut end) (java.util.Arrays/copyOfRange buf cut end)))
+            (when (< start cut)
+              (String. buf start (- cut start) "UTF-8"))))
 
         finish-utf8
         (fn []
-          (let [out-buf (java.nio.CharBuffer/allocate 64)
-                _ (.decode utf8-decoder
-                           (java.nio.ByteBuffer/wrap (byte-array 0)) out-buf true)
-                _ (.flush utf8-decoder out-buf)
-                pos (.position out-buf)]
-            (when (pos? pos)
-              (String. (.array out-buf) 0 pos))))
+          (when-let [pending @carry]
+            (reset! carry nil)
+            (String. pending "UTF-8")))
 
         handle-raw-bytes
         (fn [raw-bytes offset len]
@@ -416,7 +450,7 @@
             (let [copy (java.util.Arrays/copyOfRange raw-bytes offset (+ offset len))]
               (swap! raw-chunks conj [copy 0 (alength copy)])))
           ;; Pi: streaming decode — handles multi-byte sequences split across chunks
-          (when-let [decoded (decode-chunk raw-bytes offset len false)]
+          (when-let [decoded (decode-chunk raw-bytes offset len)]
             (let [clean (sanitize-output decoded)]
               (when (seq clean)
                 (handle-text clean)))))

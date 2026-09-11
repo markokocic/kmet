@@ -35,7 +35,7 @@ Jolt, each with a minimal repro; §8 summarizes what is live today).
 |---|---|---|---|
 | `libs/` (generic utils) | 27 | ~8.3k | half pure (diff, yaml, markdown, highlight, reakt, num), half JVM-bound (http, process, crypto, archive, oauth, jsonrpc, sse) |
 | `ai/` (providers/auth) | 13 + 10 `api/` | ~8.8k | request builders (pure) + streaming over `libs.http` + auth/token caches on disk |
-| `tui/` (generic TUI) | 11 + 21 components | ~11.7k | ~95% pure; only `terminal.clj` (JLine) + `core.clj` reader/timers touch the host |
+| `tui/` (generic TUI) | 11 + 21 components | ~11.7k | ~95% pure; only the terminal backends (`terminal.clj` protocol + `terminal_jline.clj`/`terminal_native.cljc`) + `core.clj` reader/timers touch the host |
 | `app/` (agent/tools/ui) | 14 + 11 tools + 27 ui | ~17.4k | business logic + tools (bash/edit/grep/ls/read/write/find) + `extensions.cljc` (SCI) |
 | `modes/` (entry) | 2 | ~4.5k | `interactive.clj` (4.4k, TUI wiring) + `print.clj` (headless) |
 | root (`core/config/debug/extension/build`) | 5 | ~1.6k | CLI dispatch, config loading, extension contract, bb-based build |
@@ -127,7 +127,12 @@ reports exit 0 on kill — kmet works around it; check Jolt matches),
 The bash tool + `bash-executor` + session export + git operations all sit
 on this; if `jolt.process` falls short, the fallback is direct
 `posix_spawn`/`waitpid`/`kill` FFI (the exact calls `process.ss` already
-uses for Jolt's own spawning — reusable patterns).
+uses for Jolt's own spawning — reusable patterns). **The bash-tool path is
+green on `jolt test-ext` as of 2026-09-11** — two jolt gaps resolved
+kmet-side in `bash-executor`: the streaming decoder no longer uses the JVM
+`CharsetDecoder` (absent on jolt — bb-jolt.md JOLT-11), and stdin is an
+always-pipe closed right after spawn because jolt's
+`ProcessBuilder.redirectInput(File)` is a no-op (JOLT-12).
 
 ### B3. Extension isolation (`app/extensions.cljc` — SCI, 1668 LOC)
 
@@ -263,7 +268,7 @@ matter.
 | # | kmet surface | Jolt answer (verified on checkout) | size |
 |---|---|---|---|
 | M1 | `clojure.data.json` (the swap from `cheshire` → `data.json` is done — `kmet.libs.json` now aliases `clojure.data.json` directly) | **RESOLVED 2026-09-09 — no JSON lib needed:** `org.clojure/data.json` is a `deps.edn` Maven dep and Jolt resolves Maven deps itself, so `kmet.libs.json` loads unchanged on Jolt. Verified green on Jolt `v0.8.5`: `test-json` (4 tests/18 assertions), `test-jsonrpc` (17/41), `test-sse` (33/109). **Note:** `http.cljc` is already ported (curl path via `#?(:jolt ...)`); all 27 libs now load and test green on bb/JVM. M1 is closed (data.json works on both hosts) | done — no new lib |
-| M2 | `tui/terminal.clj` (JLine raw/timed-reads/size) + `core.clj` reader/timers/resize/drain | termios FFI (Unix) + kernel32 FFI (Windows); `future` reader + `locking` + gen-counters — see `jolt-tui.md` §§4–7,9. Evaluated 2026-09-06: `jolt-lang/glimmer-tui` (ncursesw via FFI, Unix-only, fullscreen `initscr` takeover) rejected — wrong architecture for the inline ANSI/scrollback model; JLine stays on bb (`jolt-tui.md` §2 decision) | rewrite ~500 LOC (Jolt only) |
+| M2 | `tui/terminal.clj` (JLine raw/timed-reads/size) + `core.clj` reader/timers/resize/drain | termios FFI (Unix) + kernel32 FFI (Windows); `future` reader + `locking` + gen-counters — see `jolt-tui.md` §§4–7,9. Evaluated 2026-09-06: `jolt-lang/glimmer-tui` (ncursesw via FFI, Unix-only, fullscreen `initscr` takeover) rejected — wrong architecture for the inline ANSI/scrollback model; JLine stays on bb (`jolt-tui.md` §2 decision). **LANDED 2026-09-11 (Unix)**: `kmet.tui.terminal` is now a lean total `ITerminal` protocol + shared verbs; `terminal_jline.clj` (bb) and `terminal_native.cljc` (Jolt: termios + poll/read + ioctl winsize + shutdown-hook restore) are two backends behind it, resolved at runtime. Verified on `jolt v0.8.6-72`: FFI pty round-trip, new native tests green, `jolt test-ext kmet.tui.test-render-loop` green (was 5 E), and the real kmet TUI runs on Jolt (`jolt run -m kmet.core` in a pty, clean exit 0). Windows stays open (`jolt-tui.md` §0/§6) | Unix done; Windows open |
 | M3 | `libs/crypto.clj` (315 LOC: RSA/EC `KeyFactory`, `SHA256withRSA/ECDSA` `Signature`) + `libs/aws_sigv4.clj` (213 LOC: `MessageDigest` SHA-256, `Mac` HmacSHA256, `HexFormat`, `Normalizer`?) — grep the exact class list before the FFI design | OpenSSL FFI following `mvn_http.clj`'s libcrypto/libssl loading (note macOS boringssl SIGABRT hazard — explicit Homebrew paths only); RSA via libcrypto; `SecureRandom` via OS source. The `io.github.jolt-lang/crypto` git dep is in `deps.edn` (RFC 0014). **Verified 2026-09-09:** the symmetric half holds — `test-aws-sigv4` fully green on Jolt (5 tests/18 assertions), so `MessageDigest`/`Mac` are covered. The asymmetric half still gaps — `test-crypto` on Jolt: 10 tests, 2 pass, 8 fail in key-parse/sign paths: `KeyPairGenerator` has no provider (`No dependency provides java.security.KeyPairGenerator … :jolt/provides … (RFC 0014)`), `Base64/getMimeDecoder` is unshimmed (PEM/PKCS parse), and JWK hits `No matching field found: toByteArray for class java.lang.Long`. The `Base64/getMimeDecoder` half is now covered by kmet's own `jolt/` provider lib (§9). Re-verified in the 2026-09-09 full-suite run (§8): 10 tests, 2 pass, 1 failure (`test-parse-private-key-rejects-garbage` — `getMimeDecoder`) + 7 errors (4× `getMimeDecoder`, 2× JWK `toByteArray`-on-Long, 1× `KeyPairGenerator`); the same `KeyPairGenerator` gap surfaces in `ai.test-google-adc` (service-account flow) and `libs.test-oauth/test-jwt-bearer-token`. **CLOSED 2026-09-10:** RSA landed in jolt.crypto (merged upstream as jolt-lang/crypto#8, merge `79ecb3d` — keygen + `SHA*withRSA` + `KeyFactory`), the JWK `.toByteArray` gap landed in `kmet.libs.crypto/bigint->bytes`, and `test-crypto` is fully green on Jolt (10 tests/21 assertions) | done (jolt.crypto + kmet.libs.crypto) |
 | M4 | `libs/oauth.clj` (611) + `ai/oauth.clj` (1012) + `ai/google_adc.clj` (121) — browser launch, localhost callback server, token cache | `ServerSocket` shim exists (`stdlib/jolt/socket.clj`, gated on `(require 'jolt.socket)`); browser launch via `jolt.process`; token cache via `spit`/`slurp`. **Verified 2026-09-09:** `test-oauth` on Jolt: 26 tests, 1 failure + 1 error — `test-callback-server` times out (localhost callback; `ServerSocket` shim is gated on `(require 'jolt.socket)`) and `test-jwt-bearer-token` fails on the M3 `KeyPairGenerator` gap. **Callback server FIXED** (commit `596f439`, 2026-09-09: jolt's `readLine` kept the trailing `\r`, so the header-block end arrived as `"\r"` — truthy — and the reader blocked one line past the headers forever; plus a socket-shim read gap); re-verified in the full-suite run (§8): 26 tests/65 assertions, **1 error only** (`test-jwt-bearer-token`, M3). **Upstream v0.8.6 + main (re-verified 2026-09-11):** JOLT-1 is fixed and `ai.test-oauth` is 53 tests/223 assertions fully green on jolt, but the `readLine` claim was too broad: v0.8.6's fix covers `System/in`'s `read-line`, not the `BufferedReader`/`InputStreamReader` path the callback server uses — on `v0.8.6-72-g0f7d1a11` a socket line `"x\r\n"` still reads `"x\r"` (probed 2026-09-11; same for the ByteArrayInputStream construction), so kmet's `str/trim` emptiness check is LOAD-BEARING and stays. The 3-arg socket `write` stands too (portable, identical on both hosts — the 2-arg `write(byte[])` still throws on jolt's SocketOutputStream, verified 2026-09-10). | adapt ~1.7k LOC |
 | M5 | `libs/archive.clj` (46 LOC, `ZipFile` read) + `sse.clj` CRC-32 (pure-Clojure `libs/hash.clj/crc32` since the port — Bedrock frame tests green on Jolt, no zip work) + `extensions.cljc:910,921` (`JarFile` probes) + `build.cljc:227,245,389` (`ZipOutputStream` uberjar/pack-extension). (`ai/models.clj` needs no zip work — catalogs load via `io/resource`, which answers file:/jar:/embedded URLs alike.) | `jolt.fs` explicitly EXCLUDES zip/gzip (`stdlib/jolt/fs.clj:12`: "java.util.zip not shimmed yet"). **DECIDED 2026-09-08: bb-only until the `jolt build` rewrite** — `build.cljc`/`libs/archive.clj` entry points throw `::bb-only` under Jolt, their tests carry `^:bb-only` (the runner skips them there); zip/jar work defers to extension-jar materialization via unzip (jolt's own mvn-jar model) | rewrite build; archive via FFI or subprocess. Note:
@@ -271,7 +276,7 @@ matter.
 | M7 | `libs/clipboard.clj`, `libs/terminal_image.clj` (Base64 — shimmed, keep), OSC-52/kitty-graphics emit | clipboard via platform subprocesses (`pbcopy`/`xclip`/`clip`) through `jolt.process`; image protocols are pure emit logic | small |
 | M8 | `config.clj` (XDG paths, EDN load/save, file watching?) | `jolt.fs` (vendored `babashka.fs`, minus zip) covers paths; `spit`/`slurp`/EDN portable; watcher → poll (same as `tui.theme`) | adapt |
 | M9 | `debug.clj` (file logging) + crash/render logs | `(spit path text :append true)` (`jolt-io-writer` is 1-arg — `io.ss:1314-1323`; `spit` takes `:append` — `io.ss:1164-1195`); timestamps via the `io.github.jolt-lang/time` dep (already in `deps.edn`) or manual format. Note: Jolt's `java.io.tmpdir` honors `$TMPDIR` (`host-static-methods.ss:1002,1016`), unlike bb's hardcoded `/tmp` — keep the explicit-dir pattern anyway | small |
-| M10 | `bb.edn` tasks (22: `run` + 21: uberjar/build/test/test-ext/changed/test-changed/test-ext-changed/lint-changed/format-changed/format-check-changed/nrepl/check/generate-models/generate-image-models/check-model-data/pack-extension/lint/format/format-check/help) | **DONE (test task):** `kmet.runner` is now host-aware and tolerant — every test namespace is required in a try; unloadable ones (babashka-internal requires like `babashka.classpath`/`babashka.classes`, `java.time.format.DateTimeFormatter` gaps, …) are reported and skipped, the rest run. Per-var `^:slow` split + per-var filters work on BOTH hosts (`jolt test` non-slow / `jolt test-ext` slow; bb.edn `:paths ["src" "test"]` supplies the roots under jolt). Engine: bb = per-var output capture + ref counters; jolt = `clojure.test/test-vars` with jolt's own process-wide `counters` atom read as before/after deltas (`jolt?` = `(find-var 'clojure.core/*jolt-version*)`). **Full-suite run 2026-09-09 (`jolt v0.8.5-36-gbac15682`): all 107 namespaces load — zero unloadable** (the earlier babashka-internal/`java.time` load gaps are gone) and 1928 tests run end-to-end; deterministic result 18 failures + 18 errors, all jolt-only — **11 + 16 after the same-day kmet-side workarounds** for causes 2/4/7 (see §8). The `^:slow` set is a separate story — **not green on jolt** (§8): 19 F + 7 E, of which 8 reds are TUI-attributable. Remaining M10 work: `jolt build` packaging, lint/format gates, model generators | mostly done for tests; slow-set status in §8 |
+| M10 | `bb.edn` tasks (22: `run` + 21: uberjar/build/test/test-ext/changed/test-changed/test-ext-changed/lint-changed/format-changed/format-check-changed/nrepl/check/generate-models/generate-image-models/check-model-data/pack-extension/lint/format/format-check/help) | **DONE (test task):** `kmet.runner` is now host-aware and tolerant — every test namespace is required in a try; unloadable ones (babashka-internal requires like `babashka.classpath`/`babashka.classes`, `java.time.format.DateTimeFormatter` gaps, …) are reported and skipped, the rest run. Per-var `^:slow` split + per-var filters work on BOTH hosts (`jolt test` non-slow / `jolt test-ext` slow; bb.edn `:paths ["src" "test"]` supplies the roots under jolt). Engine: bb = per-var output capture + ref counters; jolt = `clojure.test/test-vars` with jolt's own process-wide `counters` atom read as before/after deltas (`jolt?` = `(find-var 'clojure.core/*jolt-version*)`). **Full-suite run 2026-09-09 (`jolt v0.8.5-36-gbac15682`): all 107 namespaces load — zero unloadable** (the earlier babashka-internal/`java.time` load gaps are gone) and 1928 tests run end-to-end; deterministic result 18 failures + 18 errors, all jolt-only — **11 + 16 after the same-day kmet-side workarounds** for causes 2/4/7 (see §8). The `^:slow` set is a separate story — **not green on jolt** (§8): 19 F + 7 E, of which 8 reds are TUI-attributable; the 17 F bash-tool share turned green 2026-09-11 (JOLT-11/JOLT-12, `bash-executor` workarounds). Remaining M10 work: `jolt build` packaging, lint/format gates, model generators | mostly done for tests; slow-set status in §8 |
 | M11 | `clojure.spec.alpha` (SCI-context injection only), `clojure.walk` (2 requires: `libs/json.clj:16`, `ai/constrained_sampling.clj:13`), `BigDecimal` (`edn_writer` + SCI class table) | spec: absent from `stdlib/` (verified — declare `org.clojure/spec.alpha` explicitly per README's "terminal dependency" rule, or rewrite the one use); `walk`: present (`stdlib/clojure/walk.clj`, seed-embedded — keep); `BigDecimal`: PRESENT (`host/chez/java/bigdec.ss`: `M` literals + `with-precision` per README — the earlier "absent" claim was wrong; just port the call sites) | small |
 | M12 | `defrecord` (27 files) + `reify` (6 files) + protocols + `deftype` (zero definitions — only comments) | README Differences confirms `deftype`/`defrecord`/`reify`/`extend-protocol`, multimethods, STM, `future`/`promise`/`agent` and `core.async` behave as on the JVM — still verify early: `satisfies?`-on-reify semantics, `defrecord` positional factories, protocol dispatch for `IComponent`/`IFocusable`. The TUI's `satisfies?` avoidance notes (AGENTS.md SCI gotcha) need re-checking on Jolt | verify early, affects everything |
 | M13 | Custom `defcomponent`/`with-let` macros + clj-kondo hooks | Jolt compiles macros normally (self-hosted compiler) — should port; re-verify hygiene/&env behavior (`go`-style passes are async-only, plain macros fine). Kondo hooks keep working (source-level) | verify early |
@@ -377,27 +382,34 @@ failures with reasons; the full run without filters also loads the `^:slow`
 and `^:bb-only` namespaces (their vars are then filtered out).
 
 **Loads: all 107 namespaces load on Jolt — zero unloadable** (no skip report
-in any of ~18 full runs). The four namespaces that never print a "Testing"
-line are not load failures: `build-test` (10 vars) and `libs.test-archive` (3)
-are all `^:bb-only` (M5), `modes.test-overlay-input-smoke` (2) and
-`tui.test-render-loop` (5 of its 6 vars are `^:slow`) run under
-`jolt test-ext` — where they **error** on jolt (`Unknown class
-TerminalBuilder`; the suite builds a virtual JLine terminal), not pass;
-see the test-ext paragraph below.
+in any of ~18 full runs). The namespaces that never print a "Testing" line on
+Jolt are not load failures: `build-test` (10 vars) and `libs.test-archive` (3)
+are all `^:bb-only` (M5), and `modes.test-overlay-input-smoke` (2) runs only
+under `jolt test-ext` — where it times out for the runner reason noted below,
+not a terminal reason. `tui.test-render-loop` (5 of its 6 vars are `^:slow`)
+used to error there on `Unknown class TerminalBuilder` (a virtual JLine
+terminal); since the M2 adapter it drives a protocol stub and is **green** on
+`jolt test-ext` (2026-09-11).
 
-**Slow set (`jolt test-ext`) is NOT green — 19 F + 7 E (2026-09-10, same
-host).** The non-slow run above says nothing about it: the slow tests are
-the subprocess-, pty- and network-driven ones. Breakdown:
+**Slow set (`jolt test-ext`) was NOT green as of 2026-09-10 (19 F + 7 E);
+`kmet.app.test-tools` turned green 2026-09-11** — the bash tool's two jolt
+gaps (JOLT-11 JVM `CharsetDecoder` / JOLT-12 `redirectInput(File)` no-op)
+are worked around kmet-side and the whole slow namespace passes on both
+hosts. The non-slow run above says nothing about the slow set: those tests
+are the subprocess-, pty- and network-driven ones. Breakdown:
 
 | namespace | reds | cause |
 |---|---|---|
-| `kmet.app.test-tools` | 17 F | jolt-only; the bash/pipe tests (`stdout`+`stderr` merge) — B2 (subprocess pipe semantics), not TUI. Green on bb (10 tests / 22 assertions) |
-| `kmet.tui.test-render-loop` | 5 E | `Unknown class TerminalBuilder` — JLine; needs the jolt-tui ITerminal adapter (`jolt-tui.md` §0) |
-| `kmet.modes.test-overlay-input-smoke` | 2 F + 1 E | pty-driven app smoke test; the 15 s ns timeout interrupts it (`InterruptedException: future deref`). Needs the adapter + input pipeline |
+| `kmet.app.test-tools` | 0 — **green 2026-09-11** | was 17 F; jolt-only, not TUI: the streaming decoder used `java.nio.charset.CharsetDecoder`/`CodingErrorAction` (absent on jolt — bb-jolt.md JOLT-11) and the `/dev/null` stdin redirect was a no-op (`ProcessBuilder.redirectInput(File)` — JOLT-12). Fixed kmet-side (`bash-executor`: portable UTF-8 byte carry, always-pipe stdin closed after spawn). Green on bb (10 tests / 22 assertions) |
+| `kmet.tui.test-render-loop` | 0 — **green 2026-09-11** | was 5 E (`Unknown class TerminalBuilder` — JLine); the suite now drives a protocol stub, no JLine. Fixed by the M2 adapter + total-`ITerminal` refactor |
+| `kmet.modes.test-overlay-input-smoke` | 2 F + 1 E | NOT a terminal-adapter gap (corrected 2026-09-11): the test spawns a hardcoded `bb run` through a pty, so on Jolt it exercises bb's TUI; it fails because its stages need ~20s while the Jolt runner kills each namespace after 15s (`kmet.runner`: `deref f 15000`) |
 | `kmet.ai.test-llm` | 1 E | `test-llm-codex-responses-end-to-end` — network e2e, interrupted by the ns timeout |
 
-**TUI-attributable: 8 of the 26 reds** (render-loop + overlay-input-smoke);
-the same two namespaces are covered in `jolt-tui.md` §0.
+**TUI-attributable: 0 after M2 (Unix, 2026-09-11)** — of the 26 old reds,
+5 are fixed (`test-render-loop`) and 3 are re-attributed as non-TUI (the
+runner's 15 s per-namespace timeout against a ~20 s pty test that spawns
+`bb run` — see the corrected row above). What remains is the network e2e
+timeout (the bash/subprocess set is green as of 2026-09-11).
 
 **Result of the non-slow run (2026-09-10): 1981 tests / 13277 assertions, deterministic 1 failure + 10
 errors — every one jolt-only** (bb is green on the affected namespaces:

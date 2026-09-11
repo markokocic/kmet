@@ -4,8 +4,9 @@ Field reports of Clojure-semantics bugs in Jolt (first observed on
 `jolt v0.8.5-36-gbac15682`, threaded Chez 10.x, 2026-09; re-verified on
 `jolt v0.8.6-72-g0f7d1a11` — upstream main, locally built, 2026-09-11:
 JOLT-1..JOLT-8 are fixed upstream; JOLT-9 is open (fork pin, PR
-jolt-lang/http-client#19) and Android-only; JOLT-10 is new), each with a minimal
-repro, the expected
+jolt-lang/http-client#19) and Android-only; JOLT-10..JOLT-12 are new and
+open — 11 and 12 carry kmet-side workarounds), each with a minimal repro,
+the expected
 Clojure/babashka behavior, and the kmet test it broke.
 All were discovered by running kmet's test suite under Jolt (`jolt test`);
 bb/JVM is the reference implementation (real Clojure semantics).
@@ -486,3 +487,87 @@ the alternation so the two `.*` branches are matched separately (or
 replaced by `str/includes?`), or raise the runner's per-namespace timeout
 (the cancellation itself is what turns the timeout into spurious errors).
 kmet has applied no side change so far.
+
+---
+
+## JOLT-11 — `java.nio.charset.CodingErrorAction` is absent; `CharsetDecoder` answers only `.charset`
+
+**Area:** `host/chez/java/host-static-classes.ss` — the `java.nio.charset`
+shim (`Charset`/`CharsetEncoder`/`CharsetDecoder`).
+
+**Repro (built `v0.8.6-72-g0f7d1a11`):**
+
+```clojure
+(java.nio.charset.CodingErrorAction/REPLACE)
+;; → IllegalArgumentException: No dependency provides java.nio.charset.CodingErrorAction —
+;;   a concrete implementation of the JDK classes must be provided. …
+
+(let [d (.newDecoder (java.nio.charset.Charset/forName "UTF-8"))]
+  (.decode d (java.nio.ByteBuffer/wrap (byte-array [104 105]))))
+;; → No matching method decode found taking 1 args for class java.nio.charset.CharsetDecoder
+```
+
+`Charset/newDecoder` constructs the `charset-decoder` jhost, but only
+`.charset` is in its method table — no `.decode`, `.onMalformedInput`,
+`.onUnmappableCharacter`, `.flush`, `.reset`.
+
+**Expected vs actual:** the JVM has the `CodingErrorAction` enum
+(`REPLACE`/`REPORT`/`IGNORE`) and the decode/flush methods are the
+`CharsetDecoder` contract. On jolt the class cannot even be resolved (the
+analyzer refuses it: no `:jolt/provides` claim, and the runtime does not
+implement it), and decoding a ByteBuffer throws.
+
+**kmet impact:** `kmet.app.bash-executor` decoded each output chunk with a
+streaming `CharsetDecoder` (REPLACE action, `endOfInput? false`) — the
+first chunk of bash output threw, so every bash tool call in the Jolt TUI
+failed with the "No dependency provides …" error.
+
+**Status:** open, not filed upstream (a fix needs the class plus the
+decoder methods, or a claimable `CodingErrorAction`). **kmet-side
+workaround applied 2026-09-11:** the executor reassembles UTF-8 by carrying
+the ≤3 bytes of a sequence split across reads into the next chunk and
+decoding complete runs with `(String. bytes off len "UTF-8")` (malformed
+bytes become U+FFFD — the textual equivalent of REPLACE). Regression test:
+`kmet.app.test-tools/test-bash-executor-streaming-utf8-decode` (split sizes
+1/2/3/5 bytes, invalid bytes, a stranded lead at EOF).
+
+---
+
+## JOLT-12 — `ProcessBuilder.redirectInput(File)` is silently ignored (the child inherits jolt's stdin)
+
+**Area:** `host/chez/java/process.ss` — `redirectInput` stores any value,
+but the spawn path (`proc-build-shell-command` → `proc-redir-fragment`)
+only understands `ProcessBuilder$Redirect` jhosts; a `java.io.File`
+argument falls through as "no redirect" and fd 0 stays inherited.
+
+**Repro (built `v0.8.6-72-g0f7d1a11`):**
+
+```clojure
+(require '[babashka.process :as p] '[babashka.fs :as fs])
+(deref (p/process ["sh" "-c" "cat; echo FINISHED"]
+                  {:in (fs/file "/dev/null") :out :pipe :err :pipe})
+       5000 ::timeout)
+;; → ::timeout — `cat` reads jolt's stdin and never sees EOF.
+;; bb/JVM: {:exit 0} with "FINISHED" — the JDK's redirectInput(File) overload.
+```
+
+`babashka.process` translates a File `:in` with
+`(.redirectInput pb (fs/file in))` — the JDK-9 `redirectInput(File)`
+overload, which jolt models as "store any value" but never turns into a
+`Redirect.from`. (`:out`/`:err` Files are fine: `babashka.process` converts
+them to `Redirect/to` itself.)
+
+**Expected vs actual:** JVM: fd 0 is the file (EOF for `/dev/null`). jolt:
+fd 0 is inherited from jolt's process — for the TUI that is the terminal,
+so a bare `cat` both steals TTY input and blocks the tool call forever.
+
+**kmet impact:** `kmet.app.bash-executor` redirected stdin from
+`/dev/null` (NUL on Windows) so commands that read stdin get EOF instead
+of the TUI's TTY (pi's stdio `ignore`). On jolt the redirect vanished, so
+`kmet.app.test-tools/test-tool-bash-stdin-eof` (`cat; echo FINISHED`)
+timed out the runner's 15 s per-namespace budget.
+
+**Status:** open upstream. **kmet-side workaround applied 2026-09-11:**
+the executor always spawns with `:in :pipe` and closes the stream right
+after spawn (the WSL `-s` transport already worked that way — a closed
+empty pipe is EOF), so no host depends on the File redirect.
