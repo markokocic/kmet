@@ -62,7 +62,7 @@ bodies, idle-timeout readers. Every LLM call in every provider rides this.
 **Decision (revised 2026-09-09): native `babashka.http-client` on Jolt over the
 `jolt-lang/http-client` shims; curl only for SOCKS/https-scheme proxies and
 live `:as :stream` feeds.** The 2026-09-06 rejection below predated the
-library's `java.net.http` work. Latest main (`4744256f83e5`, 2026-09-09) runs
+library's `java.net.http` work. Its main (`4744256f83e5`, 2026-09-09) runs
 `org.babashka/http-client` 0.4.24 unmodified from Maven over `jolt.http.jdk`
 (RFC 0014 `:jolt/provides`): real `:proxy` routing (absolute-form http,
 CONNECT-tunnelled https), `:follow-redirects` `:never`/`:normal`/`:always`
@@ -81,7 +81,11 @@ The transport is also a user setting (`settings.edn` `:http-transport`,
 `:curl` — every request through curl on both hosts; `test-http` covers
 every request contract under both modes on both hosts (Jolt: 25/90).
 Verified: deps.edn carries `org.babashka/http-client` 0.4.24 +
-`io.github.jolt-lang/http-client` (git `4744256f83e5`); its transitive
+`io.github.jolt-lang/http-client` — **pinned to `markokocic/http-client`
+`fix/bionic-addrinfo` (`4958c9d`, one commit on upstream main
+`4744256f83e5`) until its upstream PR merges**, because upstream's `ai_addr`
+offset is glibc's and every platform-transport request fails EFAULT on
+bionic/Android (bb-jolt.md JOLT-9); its transitive
 `jolt-lang/jolt-crypto` pin (`44da69` — same repo as the direct
 `io.github.jolt-lang/crypto` dep at `5effcc89`) lands both shas on the jolt
 classpath with no load conflict observed. test-http is green on both hosts
@@ -300,7 +304,7 @@ that depended on M1. Jolt side (re-verified 2026-09-09, `jolt v0.8.5`): **json/j
 | `hash` | 🟢 | 🟢 | pure, works |
 | `highlight` | 🟢 | 🟢 | tests pass (139/139) |
 | `hooks` | 🟢 | 🟢 | pure, works |
-| `http` | 🟢 | 🟡 | **ported** — Jolt runs direct/http-proxy traffic through babashka.http-client over the jolt-lang/http-client shims (deps.edn: org.babashka/http-client 0.4.24 + io.github.jolt-lang/http-client), curl for SOCKS/https-scheme proxies and `:as :stream` (see B1); the `:http-transport` setting can force curl for everything. test-http 25/90 green on Jolt (every contract under both modes) — **requires the two bionic patches** for the platform transport (addrinfo `ai_addr` offset + `errno` accessor, bb-jolt.md JOLT-8/JOLT-9; both pre-exist the #926/#927 rebase and are applied locally). Loads on bb |
+| `http` | 🟢 | 🟡 | **ported** — Jolt runs direct/http-proxy traffic through babashka.http-client over the jolt-lang/http-client shims (deps.edn: org.babashka/http-client 0.4.24 + io.github.jolt-lang/http-client), curl for SOCKS/https-scheme proxies and `:as :stream` (see B1); the `:http-transport` setting can force curl for everything. test-http 25/90 green on Jolt (every contract under both modes) — **the platform transport needs both bionic fixes**: the `ai_addr` offset (bb-jolt.md JOLT-9), which comes from the `markokocic/http-client` fork pin in deps.edn until its PR merges, and the `errno` accessor (JOLT-8), which needs the locally built jolt with the `fix/bionic-errno` patch (`patchset` branch) since it is a runtime fix. Both pre-exist the #926/#927 rebase. Loads on bb |
 | `json` | 🟢 | 🟢 | Jolt 2026-09-09: 4 tests/18 assertions green — data.json resolves via deps.edn (M1 closed) |
 | `jsonrpc` | 🟢 | 🟢 | Jolt 2026-09-09: 17 tests/41 assertions green (M1 closed) |
 | `markdown` | 🟢 | 🟢 | tests pass (137/137) |

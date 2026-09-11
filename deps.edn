@@ -29,8 +29,16 @@
         ;; Jolt — curl stays only for SOCKS/https-scheme proxies and live
         ;; :as :stream feeds (jolt-port.md B1).
         org.babashka/http-client {:mvn/version "0.4.24"}
-        io.github.jolt-lang/http-client {:git/url "https://github.com/jolt-lang/http-client.git"
-                                         :git/sha "4744256f83e5cf9d3692f4f91e3d7df3c6d41da8"}
+        ;; TEMPORARY (2026-09-11): markokocic's fork, branch
+        ;; fix/bionic-addrinfo — the upstream `ai_addr` offset is glibc's
+        ;; (24), while bionic's struct addrinfo is BSD-ordered (32), so
+        ;; connect(2) gets a NULL sockaddr and every platform-transport
+        ;; request fails EFAULT on Android/Termux (bb-jolt.md JOLT-9). The
+        ;; branch is ONE commit on upstream main 4744256, so reverting is
+        ;; changing the two lines back once the PR merges:
+        ;; https://github.com/jolt-lang/http-client/compare/main...markokocic:fix/bionic-addrinfo
+        io.github.jolt-lang/http-client {:git/url "https://github.com/markokocic/http-client.git"
+                                         :git/sha "4958c9d2730f05078143ed3f2b194b19aa8d0ba2"}
         ;; kmet's own RFC 0014 provider lib (jolt/ dir): the JDK classes the
         ;; jolt ecosystem lacks — Base64 MIME decode and the
         ;; HttpTimeoutException ctor (RSA used to be here; jolt.crypto

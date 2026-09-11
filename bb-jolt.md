@@ -402,14 +402,18 @@ whose first two bytes are `AF_INET` (2) or `AF_INET6` (10); the BSD order
 
 **Status:** fix pushed upstream for review — branch `fix/bionic-addrinfo`
 (commit `4958c9d`, based on http-client main `4744256`) on the
-`markokocic/http-client` fork. The PR is **not created yet** (the available
-token has no write permission): use the pre-filled link in
-`~/tmp/jolt-bionic-patches/pr-http-client-addrinfo.url`
+`markokocic/http-client` fork, and **kmet's deps.edn now depends on that
+fork** until the PR merges (the `io.github.jolt-lang/http-client` entry
+under `org.babashka/http-client`; revert those two lines to
+`jolt-lang/http-client` + upstream sha once merged). The upstream PR is
+**not created yet** (the available token has no write permission): use the
+pre-filled link in `~/tmp/jolt-bionic-patches/pr-http-client-addrinfo.url`
 (<https://github.com/jolt-lang/http-client/compare/main...markokocic:fix/bionic-addrinfo?expand=1>,
-title + body pre-filled; body source `pr-http-client-addrinfo.md`). The same patch is
-applied to the gitlibs checkout
-`~/.jolt/gitlibs/https___github.com_jolt-lang_http-client.git/4744256f83e5cf9d3692f4f91e3d7df3c6d41da8`
-— a jolt dep re-fetch may reset it). With it: `kmet.libs.test-http`
+title + body pre-filled; body source `pr-http-client-addrinfo.md`).
+The hand patch that used to sit in the gitlibs checkout of upstream
+`4744256...` was **removed** when the fork pin landed (that checkout is
+pristine again — the fork is the single source of the fix). With it:
+`kmet.libs.test-http`
 25 tests / 90 assertions green (was 4F + 10E), `kmet.ai.test-oauth` green,
 `kmet.app.ui.test-session-selector` 31/130 green (was 4F). Pre-existing:
 the same connect at `v0.8.6-32-gc4ebc570` (source mode, `bin/jolt`) fails
