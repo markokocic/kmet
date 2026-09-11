@@ -451,8 +451,9 @@ line truncation on ANSI-dense lines (tool output, markdown) — smaller than
   warmup (§6.2b); and wrapping a grouped pattern as `( (?i)… )` moves `(?i)`
   *inside* the group, which produced a bogus 113x regression.
 - Reader/IO workarounds (#946/#947/#948/#952/#954) are on the tool/IO paths,
-  not the frame path; they do not affect the numbers above. #946/#948/#952
-  landed in `-86`; #947 (redirectInput) and #954 (`write(byte[])`) remain.
+  not the frame path; they do not affect the numbers above. All of them have
+  since landed (#946/#948/#952 in `-86`; #947/#954 in `-98`) and the last
+  workarounds are gone (`jolt-bugs.md`).
 
 ---
 

@@ -25,15 +25,6 @@
             [kmet.ai.models :as m]
             [kmet.app.tools.core :as tools]))
 
-(defn- sock-write
-  "Write byte-array B to socket output stream OUT. Jolt's
-   SocketOutputStream only implements 1-arg (single byte) and 3-arg
-   (bytes off len) write — the 2-arg whole-array overload is missing
-   (ClassCastException) — so route every test-server write through the
-   3-arg form, which is valid on both hosts."
-  [out b]
-  (.write out b 0 (alength b)))
-
 ;; ─── Module loads ─────────────────────────────────────────────────────────
 
 (t/deftest test-llm-loaded
@@ -1446,10 +1437,10 @@
                                               "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
                                               "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"choices\":[],\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":200,\"total_tokens\":1200,\"prompt_tokens_details\":{\"cached_tokens\":300}}}\n\n"
                                               "data: [DONE]\n\n")]
-                         (sock-write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
-                                                         "Content-Type: text/event-stream\r\n"
-                                                         "Content-Length: " (count stream-body) "\r\n\r\n"
-                                                         stream-body)))
+                         (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                     "Content-Type: text/event-stream\r\n"
+                                                     "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                     stream-body)))
                          (.flush out)
                          (.close s)))
                      (catch Exception _ nil))))
@@ -1533,7 +1524,7 @@
                                 (java.io.InputStreamReader. (.getInputStream s)))]
                        (while (seq (or (.readLine rdr) "")) nil)
                        (let [out (.getOutputStream s)]
-                         (sock-write out (.getBytes "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n"))
+                         (.write out (.getBytes "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n"))
                          (.flush out)
                          (Thread/sleep 30000))
                        (.close s))
@@ -1727,10 +1718,10 @@
                                             "data: {\"output_index\":0,\"delta\":\"hello\"}\n\n"
                                             "event: response.completed\n"
                                             "data: {\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":100,\"output_tokens\":20,\"total_tokens\":120,\"input_tokens_details\":{\"cached_tokens\":10},\"output_tokens_details\":{\"reasoning_tokens\":5}}}}\n\n")]
-                       (sock-write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
-                                                       "Content-Type: text/event-stream\r\n"
-                                                       "Content-Length: " (count stream-body) "\r\n\r\n"
-                                                       stream-body)))
+                       (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                   "Content-Type: text/event-stream\r\n"
+                                                   "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                   stream-body)))
                        (.flush out)
                        (.close s))
                      (catch Exception _ nil))))
@@ -1841,10 +1832,10 @@
                                             "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"}}\n\n"
                                             "event: message_stop\n"
                                             "data: {\"type\":\"message_stop\"}\n\n")]
-                       (sock-write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
-                                                       "Content-Type: text/event-stream\r\n"
-                                                       "Content-Length: " (count stream-body) "\r\n\r\n"
-                                                       stream-body)))
+                       (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                   "Content-Type: text/event-stream\r\n"
+                                                   "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                   stream-body)))
                        (.flush out)
                        (.close s))
                      (catch Exception _ nil))))
@@ -2059,10 +2050,10 @@
                                             "data: {\"output_index\":0,\"delta\":\"hello\"}\n\n"
                                             "event: response.completed\n"
                                             "data: {\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}\n\n")]
-                       (sock-write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
-                                                       "Content-Type: text/event-stream\r\n"
-                                                       "Content-Length: " (count stream-body) "\r\n\r\n"
-                                                       stream-body)))
+                       (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                   "Content-Type: text/event-stream\r\n"
+                                                   "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                   stream-body)))
                        (.flush out)
                        (.close s))
                      (catch Exception _ nil))))
@@ -2150,10 +2141,10 @@
                                             "data: {\"output_index\":0,\"delta\":\"hello\"}\n\n"
                                             "event: response.done\n"
                                             "data: {\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}\n\n")]
-                       (sock-write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
-                                                       "Content-Type: text/event-stream\r\n"
-                                                       "Content-Length: " (count stream-body) "\r\n\r\n"
-                                                       stream-body)))
+                       (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                   "Content-Type: text/event-stream\r\n"
+                                                   "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                   stream-body)))
                        (.flush out)
                        (.close s))
                      (catch Exception _ nil))))
@@ -2238,10 +2229,10 @@
                                             "data: {\"output_index\":0,\"delta\":\"hi\"}\n\n"
                                             "event: response.completed\n"
                                             "data: {\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}\n\n")]
-                       (sock-write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
-                                                       "Content-Type: text/event-stream\r\n"
-                                                       "Content-Length: " (count stream-body) "\r\n\r\n"
-                                                       stream-body)))
+                       (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                   "Content-Type: text/event-stream\r\n"
+                                                   "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                   stream-body)))
                        (.flush out)
                        (.close s))
                      (catch Exception _ nil))))
@@ -2318,10 +2309,10 @@
                                             "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n\n"
                                             "event: message_stop\n"
                                             "data: {\"type\":\"message_stop\"}\n\n")]
-                       (sock-write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
-                                                       "Content-Type: text/event-stream\r\n"
-                                                       "Content-Length: " (count stream-body) "\r\n\r\n"
-                                                       stream-body)))
+                       (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                   "Content-Type: text/event-stream\r\n"
+                                                   "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                   stream-body)))
                        (.flush out)
                        (.close s))
                      (catch Exception _ nil))))
@@ -2722,10 +2713,10 @@
                                      ;; for)
                                      (bedrock-e2e-frame "metadata"
                                                         "{\"usage\":{\"inputTokens\":10,\"outputTokens\":5,\"totalTokens\":15,\"cacheReadInputTokens\":2,\"cacheWriteInputTokens\":1}}"))]
-                         (sock-write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
-                                                         "Content-Type: application/vnd.amazon.eventstream\r\n"
-                                                         "Content-Length: " (count frames) "\r\n\r\n")))
-                         (sock-write out frames)
+                         (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                     "Content-Type: application/vnd.amazon.eventstream\r\n"
+                                                     "Content-Length: " (count frames) "\r\n\r\n")))
+                         (.write out frames)
                          (.flush out)
                          (.close s))
                        (catch Exception _ nil))))
@@ -2814,10 +2805,10 @@
                            stream-body (str "data: {\"data\":{\"choices\":[{\"delta\":{\"content\":[{\"type\":\"text\",\"text\":\"hi\"},{\"type\":\"thinking\",\"thinking\":[{\"type\":\"text\",\"text\":\"hmm\"}]}]}}]}}\n\n"
                                             "data: {\"data\":{\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15},\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}}\n\n"
                                             "data: [DONE]\n\n")]
-                       (sock-write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
-                                                       "Content-Type: text/event-stream\r\n"
-                                                       "Content-Length: " (count stream-body) "\r\n\r\n"
-                                                       stream-body)))
+                       (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                   "Content-Type: text/event-stream\r\n"
+                                                   "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                   stream-body)))
                        (.flush out)
                        (.close s))
                      (catch Exception _ nil))))
@@ -2906,10 +2897,10 @@
                            out (.getOutputStream s)
                            stream-body (str "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}\n\n"
                                             "data: {\"usageMetadata\":{\"promptTokenCount\":10,\"candidatesTokenCount\":5,\"totalTokenCount\":15,\"cachedContentTokenCount\":2},\"candidates\":[{\"finishReason\":\"STOP\"}]}\n\n")]
-                       (sock-write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
-                                                       "Content-Type: text/event-stream\r\n"
-                                                       "Content-Length: " (count stream-body) "\r\n\r\n"
-                                                       stream-body)))
+                       (.write out (.getBytes (str "HTTP/1.1 200 OK\r\n"
+                                                   "Content-Type: text/event-stream\r\n"
+                                                   "Content-Length: " (count stream-body) "\r\n\r\n"
+                                                   stream-body)))
                        (.flush out)
                        (.close s))
                      (catch Exception _ nil))))

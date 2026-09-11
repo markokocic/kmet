@@ -1,12 +1,15 @@
-{;; kmet's RFC 0014 provider lib (see README.md in this dir): the JDK
- ;; classes the jolt ecosystem does not supply that kmet's transport-error
- ;; classifier needs — the java.net.http.HttpTimeoutException ctor.
- ;; java.util.Base64 is not on this list: the runtime implements the class
- ;; (including the MIME pair), and a class the runtime implements can be
- ;; claimed by nobody. RSA is not on this list either — jolt.crypto
- ;; provides it (EC and RSA), so the claims for java.security.Signature /
- ;; KeyPairGenerator / KeyFactory live in crypto's own :jolt/provides (jolt
- ;; allows a class only one provider).
+{;; kmet's RFC 0014 provider lib (see README.md in this dir). EMPTY BY
+ ;; DESIGN: every JDK gap this lib was created for is runtime surface now
+ ;; (jolt-bugs.md records the closures), so it claims and installs nothing.
+ ;; The scaffolding stays — the next gap adds its class below and its
+ ;; member registration to src/jolt/kmet/providers.clj's install!.
+ ;;
+ ;; A class the runtime IMPLEMENTS cannot be claimed by anybody — a member
+ ;; of it that is missing needs the guarded-require convention instead
+ ;; (AGENTS.md's jolt/ section). RSA is not on this list either —
+ ;; jolt.crypto provides it (EC and RSA), so the claims for
+ ;; java.security.Signature / KeyPairGenerator / KeyFactory live in
+ ;; crypto's own :jolt/provides (jolt allows a class only one provider).
  ;;
  ;; The native libs (libcrypto/libssl) and the crypto java.* classes come
  ;; from io.github.jolt-lang/crypto. This lib does NOT require it: crypto's
@@ -21,12 +24,8 @@
 
  :paths ["src"]
 
- ;; The classes this lib installs (RFC 0014). jolt autoloads the install
+ ;; The classes this lib installs (RFC 0014): jolt autoloads the install
  ;; namespace on the FIRST reference to one of these, whatever the registry
  ;; state (a claim is authority over who implements a class, not a fallback
- ;; for an absent one). java.util.Base64 is deliberately absent: the
- ;; runtime implements the class, so a claim would be refused. The
- ;; asymmetric classes are absent too: jolt.crypto provides
- ;; Signature/KeyPairGenerator/KeyFactory (EC and RSA) itself, and jolt
- ;; allows a class only one provider.
- :jolt/provides {jolt.kmet.providers ["java.net.http.HttpTimeoutException"]}}
+ ;; for an absent one). Empty while the lib is a no-op.
+ :jolt/provides {}}

@@ -11,18 +11,6 @@
 
 ;; ─── Local test server (java.net.ServerSocket, no external deps) ──────────
 
-(defn- sock-write
-  "Write bytes B to socket S. Jolt's SocketOutputStream only implements
-   1-arg write (single byte) and 3-arg write (bytes off len) — the 2-arg
-   whole-array overload is missing (ClassCastException) — so route every
-   test-server write through the 3-arg form, which is valid on both hosts."
-  [s b]
-  (.write (.getOutputStream s) b 0 (alength b)))
-
-(defn- out-write
-  [out b]
-  (.write out b 0 (alength b)))
-
 (defn- respond
   "Write an HTTP/1.1 response to socket S."
   [s status body hdrs]
@@ -30,8 +18,8 @@
         h (apply str (map (fn [[k v]] (str k ": " v "\r\n")) hdrs))
         head (str "HTTP/1.1 " status " X\r\n" h
                   "Content-Length: " (count b) "\r\n\r\n")]
-    (sock-write s (.getBytes head))
-    (sock-write s b)
+    (.write (.getOutputStream s) (.getBytes head))
+    (.write (.getOutputStream s) b)
     (.flush (.getOutputStream s))))
 
 (defn- read-request
@@ -292,8 +280,8 @@
                                 head (str "HTTP/1.1 302 Found\r\n"
                                           "Location: /final\r\n"
                                           "Content-Length: " (count b) "\r\n\r\n")]
-                            (sock-write s (.getBytes head))
-                            (sock-write s b)
+                            (.write (.getOutputStream s) (.getBytes head))
+                            (.write (.getOutputStream s) b)
                             (.flush (.getOutputStream s)))
                           (respond s "200 OK" req-line {}))))]
     (try
@@ -370,7 +358,7 @@
           (when-not (or (neg? v) (not= 5 v))
             (let [nmethods (.read in)]
               (dotimes [_ nmethods] (.read in))
-              (out-write out (byte-array [5 0]))
+              (.write out (byte-array [5 0]))
               (.flush out)
               (let [v (.read in)
                     _ (when (and (not (neg? v)) (not= 5 v))
@@ -386,7 +374,7 @@
                       t-in (.getInputStream target)
                       t-out (.getOutputStream target)
                       c-in (.getInputStream client)]
-                  (out-write out (byte-array [5 0 0 1 127 0 0 1 0 0]))
+                  (.write out (byte-array [5 0 0 1 127 0 0 1 0 0]))
                   (.flush out)
                   (let [p1 (doto (Thread. #(pump c-in t-out)) (.setDaemon true))
                         p2 (doto (Thread. #(pump t-in out)) (.setDaemon true))]
@@ -495,8 +483,8 @@
                                 head (str "HTTP/1.1 302 Found\r\n"
                                           "Location: /final\r\n"
                                           "Content-Length: " (count b) "\r\n\r\n")]
-                            (sock-write s (.getBytes head))
-                            (sock-write s b)
+                            (.write (.getOutputStream s) (.getBytes head))
+                            (.write (.getOutputStream s) b)
                             (.flush (.getOutputStream s)))
                           (respond s "200 OK" req-line {}))))]
     (try
@@ -514,8 +502,8 @@
                                 head (str "HTTP/1.1 302 Found\r\n"
                                           "Location: /final\r\n"
                                           "Content-Length: " (count b) "\r\n\r\n")]
-                            (sock-write s (.getBytes head))
-                            (sock-write s b)
+                            (.write (.getOutputStream s) (.getBytes head))
+                            (.write (.getOutputStream s) b)
                             (.flush (.getOutputStream s)))
                           (respond s "200 OK" req-line {}))))]
     (try
@@ -539,8 +527,8 @@
                                 head (str "HTTP/1.1 302 Found\r\n"
                                           "Location: /final\r\n"
                                           "Content-Length: " (count b) "\r\n\r\n")]
-                            (sock-write s (.getBytes head))
-                            (sock-write s b)
+                            (.write (.getOutputStream s) (.getBytes head))
+                            (.write (.getOutputStream s) b)
                             (.flush (.getOutputStream s)))
                           (do (Thread/sleep 2000)
                               (respond s "200 OK" "final-body" {})))))]
@@ -570,8 +558,8 @@
                                 head (str "HTTP/1.1 200 OK\r\n"
                                           "Content-Encoding: gzip\r\n"
                                           "Content-Length: " (count b) "\r\n\r\n")]
-                            (sock-write s (.getBytes head "ISO-8859-1"))
-                            (sock-write s b)
+                            (.write (.getOutputStream s) (.getBytes head "ISO-8859-1"))
+                            (.write (.getOutputStream s) b)
                             (.flush (.getOutputStream s))))))]
     (try
       (let [r (http/get (str base "/") {})]
@@ -593,8 +581,8 @@
                         (let [b (.getBytes "partial")
                               head (str "HTTP/1.1 200 OK\r\n"
                                         "Content-Length: 100\r\n\r\n")]
-                          (sock-write s (.getBytes head))
-                          (sock-write s b)
+                          (.write (.getOutputStream s) (.getBytes head))
+                          (.write (.getOutputStream s) b)
                           (.flush (.getOutputStream s))
                           (Thread/sleep 60000))))]
     (try
@@ -619,8 +607,8 @@
                         (let [b (.getBytes "streamed")
                               head (str "HTTP/1.1 200 OK\r\n"
                                         "Content-Length: 100\r\n\r\n")]
-                          (sock-write s (.getBytes head))
-                          (sock-write s b)
+                          (.write (.getOutputStream s) (.getBytes head))
+                          (.write (.getOutputStream s) b)
                           (.flush (.getOutputStream s))
                           (Thread/sleep 60000))))]
     (try

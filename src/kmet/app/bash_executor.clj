@@ -216,23 +216,20 @@
                                  [setsid shell "-c" command]
                                  [shell "-c" command]))
             proc-opts {:dir cwd :err :pipe :out :pipe :env env
-                       ;; Pi: stdio [pipe|ignore, pipe, pipe] — stdin is always
-                       ;; a pipe; the -s transport writes the command to it,
-                       ;; the rest close it right after spawn so a command
-                       ;; that reads stdin (e.g. bare `cat`) hits EOF instead
-                       ;; of inheriting the TTY and deadlocking the TUI. An
-                       ;; empty closed pipe, not a NUL//dev/null redirect:
-                       ;; Jolt's ProcessBuilder.redirectInput(File) is a
-                       ;; no-op, so the redirect silently came back as an
-                       ;; inherited TTY there and `cat` hung.
-                       :in :pipe}
+                       ;; Pi: stdio [ignore, pipe, pipe] — stdin is a
+                       ;; NUL//dev/null redirect so a command that reads
+                       ;; stdin (e.g. bare `cat`) hits EOF instead of
+                       ;; inheriting the TTY and deadlocking the TUI. The
+                       ;; WSL `bash -s` transport needs a real pipe instead:
+                       ;; it writes the command to stdin, then closes it.
+                       :in (if use-stdin?
+                             :pipe
+                             (fs/file (if process/windows-os? "NUL" "/dev/null")))}
             p (proc/process shell-args proc-opts)
-            ;; Pi: write command to stdin for WSL -s transport; closing on
-            ;; both transports is what turns stdin into the EOF of pi's
-            ;; stdio `ignore`.
-            _ (when (:in p)
-                (when use-stdin?
-                  (try (spit (:in p) command) (catch Exception _ nil)))
+            ;; Pi: write command to stdin for WSL -s transport, then close
+            ;; it — the EOF pi's stdio `ignore` gives the other transport.
+            _ (when (and use-stdin? (:in p))
+                (try (spit (:in p) command) (catch Exception _ nil))
                 (try (.close (:in p)) (catch Exception _ nil)))
             pid (try (-> p :proc .pid) (catch Exception _ nil))
             _ (when pid (process/track-pid! pid))

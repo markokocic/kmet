@@ -246,11 +246,7 @@
 
 (defn- write-http-response
   "Write an HTTP/1.1 response (status + text/html body, Connection: close)
-   to OUT. Writes go through the 3-arg form: Jolt's SocketOutputStream
-   only implements write(int) and write(byte[] off len) — the 2-arg
-   whole-array overload throws ClassCastException there (test_http.clj's
-   sock-write carries the same workaround), so a browser callback would
-   get a connection close with no response page."
+   to OUT."
   [out {:keys [status body]}]
   (let [status (or status 200)
         reason ({200 "OK" 400 "Bad Request" 404 "Not Found"
@@ -263,8 +259,8 @@
                   "Content-Length: " (alength body-bytes) "\r\n"
                   "Connection: close\r\n\r\n")
         head-bytes (.getBytes head "UTF-8")]
-    (.write out head-bytes 0 (alength head-bytes))
-    (.write out body-bytes 0 (alength body-bytes))
+    (.write out head-bytes)
+    (.write out body-bytes)
     (.flush out)))
 
 (defn start-callback-server

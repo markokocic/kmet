@@ -450,10 +450,7 @@
                   in flight on java.net.http streams)
      thread    — the daemon thread, for join-before-close"
   [read-fn idle-ms signal]
-  ;; ArrayBlockingQueue, not LinkedBlockingQueue: Jolt ships a ctor for the
-  ;; former only. The bound only backpressures the daemon (put blocks until
-  ;; the consumer takes); stop interrupts it, so shutdown still releases.
-  (let [q (java.util.concurrent.ArrayBlockingQueue. 65536)
+  (let [q (java.util.concurrent.LinkedBlockingQueue.)
         t (Thread.
            (fn []
              (try

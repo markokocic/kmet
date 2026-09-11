@@ -1,20 +1,19 @@
 (ns jolt.kmet.providers
-  "kmet's RFC 0014 provider (jolt-port.md §9, jolt/README.md): the
-   JDK classes the jolt ecosystem does not supply that kmet's
-   crypto/oauth/ADC paths need.
+  "kmet's RFC 0014 provider namespace (jolt-port.md §9, jolt/README.md).
 
-   Currently provided:
-     java.net.http.HttpTimeoutException ctor — jolt models the class but
-       registers no constructor; kmet's transport-error classifier keys off
-       the simple name.
+   EMPTY BY DESIGN: every gap this lib was created for is runtime surface
+   now (jolt-bugs.md records the closures) — the
+   java.net.http.HttpTimeoutException ctor, the multi-arg java.net.URI
+   ctors, ProcessBuilder's File redirects, SocketOutputStream.write(byte[]),
+   LinkedBlockingQueue and the Base64 MIME pair all come from the runtime,
+   so nothing is claimed and nothing is registered. The scaffolding stays
+   because RFC 0014 is how a JDK gap gets filled: the next one adds its
+   class to jolt/deps.edn's :jolt/provides and its member registration to
+   install! below.
 
    RSA is not provided here: jolt.crypto supplies it (EC and RSA
    keygen/Signature/KeyFactory) and claims those classes itself — jolt
    allows a class a single provider.
-
-   java.util.Base64 is not provided here either: the runtime implements the
-   class, including the MIME pair, and a class the runtime implements can be
-   claimed by nobody.
 
    NO jolt.crypto REQUIRE: this ns needs only jolt.host and clojure.core.
    crypto's classes resolve through crypto's own :jolt/provides claims on
@@ -26,23 +25,11 @@
 (defn install!
   "Register everything this lib provides. Idempotent (registrations are
    table merges; members replaced last-wins). Called once at load — the
-   final form of this namespace."
+   final form of this namespace. A no-op while the lib is empty; a member
+   of a class the runtime IMPLEMENTS but does not fully supply needs the
+   guarded-require convention instead, since jolt refuses a claim on an
+   implemented class."
   []
-  ;; HttpTimeoutException: the class is modelled but has no constructor.
-  ;; jolt.host/throwable builds a real host throwable that answers
-  ;; (class e) / ex-message / toString like the JDK's, which is all kmet's
-  ;; transport classifier reads.
-  (doseq [nm ["HttpTimeoutException" "java.net.http.HttpTimeoutException"]]
-    (clojure.core/__register-class-ctor!
-     nm
-     (fn [msg] (jolt.host/throwable "java.net.http.HttpTimeoutException" (str msg)))))
-  ;; JDK hierarchy edge: public class HttpTimeoutException extends
-  ;; IOException (jch-closure is transitive, so Exception/Throwable follow).
-  ;; Without the row, instance?/catch on the supertypes miss — jolt's class
-  ;; graph is open exactly for this (jolt.host/register-class-supers!, merge
-  ;; semantics, idempotent).
-  (jolt.host/register-class-supers! "java.net.http.HttpTimeoutException"
-                                    ["java.io.IOException"])
   nil)
 
 (install!)

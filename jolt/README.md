@@ -1,30 +1,41 @@
 # jolt/ — kmet's RFC 0014 provider lib
 
-Clojure/JDK shims for the functionality the jolt ecosystem does not supply
-that kmet's transport-error classifier needs (jolt-port.md §9). This
-directory is a self-contained library: `jolt/deps.edn` declares its source
-root and its `:jolt/provides` (RFC 0014); kmet's root `deps.edn` pulls it in
-as `{:local/root "jolt"}`. It is **inert on bb/JVM** — nothing on the bb
-classpath ever requires a `jolt.kmet.*` namespace, and the class registrations
-below are jolt-only hooks.
+kmet's RFC 0014 provider scaffolding (jolt-port.md §9). This directory is a
+self-contained library: `jolt/deps.edn` declares its source root and its
+`:jolt/provides` (RFC 0014); kmet's root `deps.edn` pulls it in as
+`{:local/root "jolt"}`. It is **inert on bb/JVM** — nothing on the bb
+classpath ever requires a `jolt.kmet.*` namespace, and the class
+registrations below are jolt-only hooks.
 
-**Scope:** what the jolt runtime lacks and jolt.crypto does not cover:
-the `java.net.http.HttpTimeoutException` ctor. RSA is jolt.crypto's — it
-provides `Signature` / `KeyPairGenerator` / `KeyFactory` for RSA (and EC)
-and claims those classes itself. `java.util.Base64` is runtime surface
-(the MIME pair is registered with the other statics), so nothing here.
-**Re-verified 2026-09-11 on `v0.8.6-86-g234f460b` (locally built):** a bare
-`(java.net.http.HttpTimeoutException. "x")` answers
-`No matching ctor found for class java.net.http.HttpTimeoutException` — so
-the lib stays for that one gap (open upstream: `jolt-bugs.md`).
+**EMPTY BY DESIGN.** Every JDK gap this lib was created for is runtime
+surface now (jolt-bugs.md records the closures): `HttpTimeoutException`'s
+ctor, the multi-arg `java.net.URI` ctors, `ProcessBuilder`'s `File`
+redirects, `SocketOutputStream.write(byte[])`, `LinkedBlockingQueue` and the
+Base64 MIME pair all come from the runtime, so nothing is claimed and
+nothing is registered. The scaffolding stays because RFC 0014 is how a JDK
+gap gets filled: the next one adds its class to `:jolt/provides` and its
+member registration to `jolt.kmet.providers/install!`.
+
+**Scope:** what the jolt runtime lacks and jolt.crypto does not cover.
+RSA is jolt.crypto's — it provides `Signature` / `KeyPairGenerator` /
+`KeyFactory` for RSA (and EC) and claims those classes itself. A *member*
+of a class the runtime IMPLEMENTS but does not fully supply cannot be
+claimed at all; that needs the guarded-require convention instead
+(AGENTS.md's `jolt/` section).
+
+**Re-verified 2026-09-11 on `v0.8.6-98-g23296732`:** all six shims the lib
+used to carry are live in a bare Jolt — `(java.net.http.HttpTimeoutException. "x")`,
+`(java.net.URI. …7 args…)`, `redirectInput(File)`, `.write` a `byte[]` to a
+socket, `(LinkedBlockingQueue.)`, and both `URI` arities — so the lib holds
+no provisions.
 
 ## No `jolt.crypto` require
 
-`jolt.kmet.providers` requires nothing but `jolt.host`. crypto's classes
-resolve through crypto's own `:jolt/provides` claims on the first reference:
-a declared provider resolves its class whatever loaded first, owns the
-members it registers, and is attributed to itself — so no require is needed
-to pin an order.
+`jolt.kmet.providers` requires nothing at all while empty (not even
+`jolt.host`). crypto's classes resolve through crypto's own
+`:jolt/provides` claims on the first reference: a declared provider resolves
+its class whatever loaded first, owns the members it registers, and is
+attributed to itself — so no require is needed to pin an order.
 
 That the require is gone changes nothing about the crypto classes' load
 order requirements:
@@ -40,25 +51,17 @@ order requirements:
   / `KeyFactory` (EC and RSA) and the spec classes — a dependent referencing
   one of those autoloads crypto directly, with no kmet involvement.
 
-No guarded require is needed either: the class kmet claims
-(`HttpTimeoutException`) resolves through its own `:jolt/provides` —
-verified: a bare `(java.net.http.HttpTimeoutException. "x")` autoloads the
-provider with no guard at all.
-
 ## What is provided
 
-| class/member | notes |
-|---|---|
-| `java.net.http.HttpTimeoutException` ctor | class modelled, no ctor registered (open upstream gap — `jolt-bugs.md`). `jolt.host/throwable` builds a host throwable answering `(class e)`/`ex-message` like the JDK's — all kmet's transport-error classifier reads. |
+Nothing. The table is empty while the lib is a no-op; a future shim adds a
+row and the matching `install!` registration.
 
 ## Verification
 
 ```sh
-# loads standalone: jolt.host only, no jolt.crypto require
-jolt -e "(require 'jolt.kmet.providers)"
-# shim live:
+# the lib loads (no-op install):
+jolt -e "(require 'jolt.kmet.providers) (println :ok)"
+# the runtime supplies what the lib used to shim:
 jolt -e "(println (class (java.net.http.HttpTimeoutException. \"x\")))"
-# kmet loads (bb: no-op):
-bb -e "(require 'kmet.libs.crypto) (println :ok)"
-jolt -e "(require 'kmet.libs.crypto) (println :ok)"
+jolt -e "(println (java.util.concurrent.LinkedBlockingQueue.))"
 ```

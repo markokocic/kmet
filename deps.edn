@@ -51,9 +51,9 @@
         io.github.jolt-lang/http-client {:git/url "https://github.com/jolt-lang/http-client.git"
                                          :git/sha "b98833b8338b66d435cdbffa480ba2b59c005a2e"}
         ;; kmet's own RFC 0014 provider lib (jolt/ dir): the JDK classes the
-        ;; jolt ecosystem lacks — the HttpTimeoutException ctor. It requires
-        ;; nothing but jolt.host: crypto's classes resolve through crypto's
-        ;; own :jolt/provides claims. Inert on bb/JVM.
+        ;; jolt ecosystem lacks. Empty by design — v0.8.6-98 supplies every
+        ;; gap it was built for, so :jolt/provides is {} and install! is a
+        ;; no-op; the scaffolding stays for the next gap. Inert on bb/JVM.
         jolt.kmet/providers {:local/root "jolt"}}
  :aliases
  {:dev {:extra-paths ["test"]}}}

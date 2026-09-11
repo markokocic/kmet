@@ -196,9 +196,11 @@ extensions/ — Shipped opt-in extensions (single .clj files or manifest dirs;
               kmet.extension contract): extensions/extensions.md — MUST be
               kept up to date with any behavior it describes
 
-jolt/      — kmet's RFC 0014 provider lib (Jolt-only; see the contract below).
-              Own deps.edn + src/jolt/kmet/providers.clj, pulled in from the
-              root deps.edn as {:local/root "jolt"}. Inert on bb/JVM: no bb
+jolt/      — kmet's RFC 0014 provider scaffolding (Jolt-only; see the contract
+              below). Own deps.edn + src/jolt/kmet/providers.clj, pulled in
+              from the root deps.edn as {:local/root "jolt"}. Empty by design
+              (v0.8.6-98 supplies every gap it was built for) but kept so the
+              next JDK gap has its slot. Inert on bb/JVM: no bb
               classpath namespace requires jolt.* and the babashka view excludes
               it; the jolt view lints it (see Lint above).
 
@@ -208,18 +210,25 @@ extension contract root: namespaces extensions depend on, init/shutdown, api).
 ```
 
 ### jolt/ — the RFC 0014 provider contract
-`jolt/` supplies JDK classes the jolt ecosystem lacks (details: jolt/README.md,
-jolt-port.md §9): currently the `java.net.http.HttpTimeoutException` ctor.
+`jolt/` is kmet's RFC 0014 provider slot (details: jolt/README.md,
+jolt-port.md §9). **Empty by design**: the JDK gaps it was built for —
+the `java.net.http.HttpTimeoutException` ctor, the multi-arg
+`java.net.URI` ctors, `ProcessBuilder` File redirects,
+`SocketOutputStream.write(byte[])`, `LinkedBlockingQueue` and the Base64
+MIME pair — are all runtime surface as of `v0.8.6-98`, so `:jolt/provides`
+is `{}` and `install!` is a no-op. The scaffolding stays for the next gap:
+add the class to `:jolt/provides` and its member registration to
+`install!`.
 RSA is not in this list — jolt.crypto provides
 `Signature`/`KeyPairGenerator`/`KeyFactory` for RSA and EC and claims those
 classes in its own `:jolt/provides` (a class may have a single provider);
 the JWK bigint→DER conversion lives in `kmet.libs.crypto/bigint->bytes`
 (portable, both hosts); `java.util.Base64` is runtime surface (the MIME pair
 included), so nothing here.
-`jolt.kmet.providers` requires nothing but `jolt.host`: crypto's classes
-resolve through `jolt.crypto`'s own `:jolt/provides` claims, a declared
-provider resolving its class whatever loaded first and being attributed to
-itself.
+`jolt.kmet.providers` requires nothing while empty (not even `jolt.host`):
+crypto's classes resolve through `jolt.crypto`'s own `:jolt/provides`
+claims, a declared provider resolving its class whatever loaded first and
+being attributed to itself.
 Convention: a src ns whose forms reference a member of a class the runtime
 IMPLEMENTS but does not fully supply adds the guarded require as its first
 form after the ns:
@@ -231,8 +240,8 @@ form after the ns:
 
 Such a member cannot be `:jolt/provides`-claimed (jolt refuses claims on
 implemented classes), so nothing autoloads and the guard is the only install
-path — no kmet namespace needs it today. Classes kmet or jolt.crypto
-declares in `:jolt/provides` (`HttpTimeoutException`,
+path — no kmet namespace needs it today. Classes declared in
+`:jolt/provides` (none today; jolt.crypto's
 `Signature`/`KeyPairGenerator`/`KeyFactory`) need no guard: the claimer's
 install namespace loads on the first reference, whatever loaded first.
 
