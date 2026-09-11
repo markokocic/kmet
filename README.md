@@ -223,9 +223,15 @@ src/kmet/
 │   │                     usage docs in src/kmet/tui/tui.md)
 │   └── components/     — text, input, editor, markdown, select/settings
 │                         lists, spinner, image, stack layouts, ...
-└── tasks/              — bb-task implementations: packagers (uberjar/dist/
-                          pack-extension) + the catalog generators; never in
-                          the shipped app or the jar
+```
+
+```
+tasks/kmet/tasks/       — every bb-task implementation (a classpath root, not
+                          part of the app): packagers (uberjar/dist/pack-extension),
+                          the catalog generators, and the dev loop (changed,
+                          test runner, clean, lint). Neither artifact carries
+                          it — the uberjar walks src/, jolt embeds src/.
+test/kmet/tasks/        — their tests
 ```
 
 The full annotated layout (every file) lives in `AGENTS.md`.

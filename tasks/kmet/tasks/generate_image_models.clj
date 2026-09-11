@@ -1,7 +1,8 @@
 ;; kmet.tasks.generate-image-models — the `bb generate-image-models` task entry:
 ;; regenerate src/kmet/ai/image_model_data/image-models.edn from the OpenRouter
-;; API (pi: packages/ai/scripts/generate-image-models.ts). Task-only code (kept
-;; out of the uberjar); the shipped app never loads it.
+;; API (pi: packages/ai/scripts/generate-image-models.ts). Task-only code under
+;; tasks/ — outside both artifacts' roots (the uberjar walks src/, jolt embeds
+;; its :embed roots), so the shipped app never carries it.
 ;;
 ;; Keeps models whose output modalities include "image"; input/output
 ;; modalities from architecture (defaulting input to [:text]); cost =

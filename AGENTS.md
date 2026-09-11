@@ -7,14 +7,14 @@
 - **Clean**: `bb clean` / `jolt clean` — removes build output (`target/`, `dist/`,
   `extensions/*/target/`), caches (`.cpcache`, `.jolt`, the clj-kondo cache),
   logs and dev residue; `--dry-run` lists without deleting. Backed by
-  `kmet.tasks.clean` (`test/kmet/tasks/clean.clj`); tracked files, `.kmet/` and
+  `kmet.tasks.clean` (`tasks/kmet/tasks/clean.clj`); tracked files, `.kmet/` and
   `.lsp/` are never touched.
 - **nREPL**: `bb nrepl` — starts nREPL server on port 1667 for interactive development (blocks). Connect your editor/tool to `localhost:1667`.
   To stop: evaluate `(System/exit 0)` via nREPL (or `fuser -k 1667/tcp` from another terminal).
 - **Lint**: `bb lint` / `jolt lint` — clj-kondo over BOTH reader views, in one report:
   the babashka view (the tree, with files carrying a `:bb` branch projected) and the jolt
   view (the files carrying `:jolt`, plus `jolt/`). clj-kondo knows only the standard
-  `:clj`/`:cljs` features, so `kmet.tasks.lint` (`test/kmet/tasks/lint.clj`) re-spells the view's own
+  `:clj`/`:cljs` features, so `kmet.tasks.lint` (`tasks/kmet/tasks/lint.clj`) re-spells the view's own
   feature to `:clj` in a projection under `target/` (`target/bb-lint/`, `target/jolt-lint/`
   — stable paths, so clj-kondo's cache carries over) and layers
   `.clj-kondo-jolt/config.edn` on top of the project config for the jolt runtime seams
@@ -25,7 +25,7 @@
   share are reported once. The gate requires 0 errors, warnings, and info findings.
   Custom macros (`defcomponent`/`with-let`)
   are handled via analysis hooks in `.clj-kondo/hooks/`; keep them in sync when the macro shapes change.
-- **Format**: `bb format` (fix) / `bb format-check` (verify) — cljfmt over `src`/`test`.
+- **Format**: `bb format` (fix) / `bb format-check` (verify) — cljfmt over `src`/`test`/`tasks`/`extensions`.
   The generated EDN provider catalogs (`src/kmet/ai/model_data/`,
   `src/kmet/ai/image_model_data/`) are excluded: their exact bytes are
   sha256-manifested (`manifest.edn`, checked by `bb check-model-data`) and are
@@ -36,8 +36,9 @@
   `cljfmt.edn` carries `:extra-indents` for the custom macros; default arg alignment is
   align-to-first-argument (modern cljfmt). Run `bb format` after structural edits (e.g. let merges).
 - **Changed-file dev loop** (fast validation of only the current changes): the `bb *-changed`
-  tasks are backed by `kmet.tasks.changed` (`test/kmet/tasks/changed.clj`) — a require-graph scan over
-  src/test with reverse-transitive closure, so a source change also re-runs the tests that
+  tasks are backed by `kmet.tasks.changed` (`tasks/kmet/tasks/changed.clj`) — a require-graph scan over
+  the classpath source roots (src/, test/, tasks/, extensions/) with reverse-transitive closure, so a
+  source change also re-runs the tests that
   transitively require it. `bb changed` lists files changed since the last commit
   (git diff vs HEAD + untracked; mtime-since-baseline fallback when the project has no git).
   `bb test-changed` runs the non-slow tests of affected namespaces and
@@ -68,7 +69,8 @@
   `build` — jolt's built-in `build` owns that name, and a task either loses to it with a
   warning on every run or, with `:override-builtin`, makes a wrapper's own `jolt build` call
   re-enter itself forever).
-  - babashka (`kmet.tasks.build`): `bb uberjar` → `target/kmet.jar` (src + resolved dep jars,
+  - babashka (`kmet.tasks.build`): `bb uberjar` → `target/kmet.jar` (the src/ tree
+    + resolved dep jars,
     only `borkdude/deps.clj` isn't bb-builtin); `bb dist [targets|--all] [--force] [--no-smoke]`
     → self-contained executables in `dist/` (official bb release binary + appended uberjar,
     fresh uberjar always rebuilt first; artifacts `kmet-<ver>-bb<bb-ver>-<slug>`, version =
@@ -81,7 +83,9 @@
     `dist/kmet-<ver>-jolt<jv>-<os>-<arch>[-dev][.exe]` and smoke-tests it with `--list-models`
     from an empty temp dir with `JOLT_PWD` pointed at it (io/resource falls back to
     JOLT_PWD-relative source roots, so a run from the checkout would pass without the
-    `deps.edn :jolt/build {:embed ["src"]}` that bakes the model catalogs in). Termux gets a
+    `deps.edn :jolt/build {:embed ["src"]}` that bakes the model catalogs in — the
+    embed root is src/ alone, so nothing under tasks/ rides in the binary even
+    though it is on the classpath). Termux gets a
     `.sh` launcher through the glibc linker, like the bb one minus `--jar`. Flags:
     `--dev|--opt`, `--closed-world`, `--dynamic`, `--boot fast|small|plain`,
     `--target MACHINE --target-pack DIR`, `-o PATH`, `--force`, `--no-smoke`, `--jolt PATH`.
@@ -163,14 +167,6 @@ src/kmet/
 ├── app/      — App-level business logic (pi: dist/core/)
 │   ├── tools/  — Tool implementations (one file per tool)
 │   └── ui/     — App-specific TUI components (Pi's coding-agent layer)
-├── tasks/    — bb-task implementations (bb.edn `:requires`/entry points):
-│              build.cljc (bb uberjar / bb dist / pack-extension),
-│              build_jolt.clj (the `jolt dist` branch), generate_models.clj +
-│              generate_image_models.clj (the bb generate-models /
-│              generate-image-models / check-model-data entries over
-│              kmet.ai.model-gen). Task-only code — nothing in the shipped app
-│              requires it, and uberjar* keeps all of kmet/tasks/ out of the
-│              jar; the dev-loop tasks live in test/ (see below)
 └── tui/      — Generic TUI library (Pi's @earendil-works/pi-tui)
     │           Usage docs: src/kmet/tui/tui.md — MUST be kept up to date
     │           with any behavior change they describe
@@ -180,17 +176,25 @@ src/kmet/
     │           namespaces that touch platform deps
     └── components/ — TUI leaf components (Container, Box, Text, ...)
 
+tasks/kmet/tasks/ — EVERY bb-task implementation (bb.edn `:requires`/entry
+              points), on both hosts: build.cljc (bb uberjar / bb dist /
+              pack-extension), build_jolt.clj (the `jolt dist` branch),
+              generate_models.clj + generate_image_models.clj (the bb
+              generate-models / generate-image-models / check-model-data
+              entries over kmet.ai.model-gen), and the dev loop — changed.clj
+              (bb changed + the *-changed tasks), runner.clj (bb test /
+              bb test-ext), clean.clj (bb clean), lint.clj (bb lint /
+              bb lint-changed, over both reader views). tasks/ is a classpath
+              root (`bb.edn`/`deps.edn` :paths) but NOT part of the app: the
+              uberjar walks src/ only and jolt embeds its :embed roots, so
+              neither artifact carries any of it. The task tests are the
+              siblings in test/kmet/tasks/ (build_test.clj, test_changed.clj,
+              test_lint.clj, ...).
+
 extensions/ — Shipped opt-in extensions (single .clj files or manifest dirs;
               pi: examples/extensions). Extension authoring guide (the full
               kmet.extension contract): extensions/extensions.md — MUST be
               kept up to date with any behavior it describes
-
-test/kmet/tasks/ — the dev-loop task implementations (they run under the test
-              classpath, not in the app): changed.clj (bb changed + the
-              *-changed tasks), runner.clj (bb test / bb test-ext), clean.clj
-              (bb clean), lint.clj (bb lint / bb lint-changed, over both reader
-              views), plus the build task tests. Their test namespaces are
-              siblings in the same dir (test_changed.clj, test_clean.clj, ...)
 
 jolt/      — kmet's RFC 0014 provider lib (Jolt-only; see the contract below).
               Own deps.edn + src/jolt/kmet/providers.clj, pulled in from the
@@ -248,11 +252,13 @@ install namespace loads on the first reference, whatever loaded first.
 - **`kmet.app.*`** (non-ui) — business logic. Never imports `kmet.tui.*` or `kmet.app.ui.*`.
   May depend on `kmet.libs.*` and `kmet.ai.*`.
 - **`kmet.core`** — entry only: args + dispatch. Never contains app logic.
-- **`kmet.tasks.*`** — bb-task implementations, never required by shipped code:
-  `src/kmet/tasks/` holds the bb-only packagers (kept out of the uberjar by
-  `uberjar*`), `test/kmet/tasks/` the dev-loop tasks that need the test
-  classpath (`changed`, `runner`, `clean`, `lint`). They may depend on anything
-  they orchestrate; nothing in `src/kmet` outside `tasks/` may require them.
+- **`kmet.tasks.*`** — bb-task implementations, never required by shipped code
+  and never packaged. Every one lives in `tasks/kmet/tasks/` — a classpath root
+  (`bb.edn`/`deps.edn` `:paths`) outside `src/`, which is what keeps them out of
+  both artifacts structurally: the uberjar walks `src/` only, and jolt embeds
+  its `:embed` roots (`["src"]`) rather than its `:paths`. Their tests are the
+  siblings under `test/kmet/tasks/`. They may depend on anything they
+  orchestrate; nothing in `src/` may require them.
 
 ### ANSI escape codes
 - **Never use raw ANSI escape codes (`\u001b[...`) outside `src/kmet/tui/` and

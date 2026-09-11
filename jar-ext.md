@@ -306,7 +306,7 @@ the prompt per turn anyway).
 - Extension self-tests run from their wrappers unchanged
   (`bb.edn :paths ["src" "test" ...]` still resolves); only moved-path
   references update.
-- `test/kmet/tasks/changed.clj`: no change needed (globs already cover
+- `tasks/kmet/tasks/changed.clj`: no change needed (globs already cover
   `extensions/**/*.clj`; flat root files like `edit_tool.clj` map to
   their namespaces correctly).
 

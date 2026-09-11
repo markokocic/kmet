@@ -43,10 +43,10 @@
 ;; ─── reader views ─────────────────────────────────────────────────────────
 
 (def default-paths
-  "The lint corpus: the shared tree on both hosts plus jolt/ — the provider
-   lib is jolt-only code, excluded from the babashka view and linted by the
-   jolt one."
-  ["src" "test" "extensions" "jolt"])
+  "The lint corpus: the shared tree on both hosts (src/, test/, tasks/) plus
+   jolt/ — the provider lib is jolt-only code, excluded from the babashka view
+   and linted by the jolt one."
+  ["src" "test" "tasks" "extensions" "jolt"])
 
 (def ^:private views
   "The two reader views of the tree; every gate runs both.
@@ -458,8 +458,8 @@
   (exit-on-findings! (lint-paths! (if (seq paths) paths default-paths))))
 
 (defn- changed-corpus-files
-  "Changed lintable files outside the changed-file scan's src/test/extensions
-   scope but inside the lint corpus (jolt/)."
+  "Changed lintable files outside the changed-file scan's source roots but
+   inside the lint corpus (jolt/)."
   []
   (->> (changed/changed-files)
        (filter #(and (str/starts-with? % "jolt/") (lintable? %)))

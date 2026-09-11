@@ -1,10 +1,16 @@
-{:paths ["src"]
+{:paths ["src" "tasks"]
+ ;; tasks/ (the bb-task implementations) is a source root but deliberately NOT
+ ;; an embed root: :paths are runtime source roots resolved against JOLT_PWD
+ ;; (and the app's own require closure decides what compiles), so task code is
+ ;; requireable — `jolt dist` needs kmet.tasks.build-jolt — without being
+ ;; compiled into, or baked into, the binary.
+ ;;
  ;; `jolt build` (driven by kmet.tasks.build-jolt, the jolt branch of the `dist`
- ;; task) bakes
- ;; every file under each :embed root into the binary, keyed by its path below
- ;; the root — so the model catalogs (io/resource "kmet/ai/model_data/…") are
- ;; embedded, not merely found next to the checkout. Without this the built
- ;; binary only resolves them while a JOLT_PWD-relative source root is there.
+ ;; task) bakes every file under each :embed root into the binary, keyed by its
+ ;; path below the root — so the model catalogs (io/resource
+ ;; "kmet/ai/model_data/…") are embedded, not merely found next to the
+ ;; checkout. Without this the built binary only resolves them while a
+ ;; JOLT_PWD-relative source root is there.
  :jolt/build {:embed ["src"]}
  :deps {        ;; babashka.fs / babashka.process are deliberately NOT deps: babashka
         ;; bundles them, and jolt vendors the same namespaces (built-in,

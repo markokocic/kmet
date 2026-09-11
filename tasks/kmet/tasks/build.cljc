@@ -249,20 +249,18 @@
                                "Main-Class: " main-class "\r\n\r\n")) zos)
       (.closeEntry zos)
       (doseq [p (sort-by str (fs/glob "src" "**.{clj,cljc,edn}"))]
-        ;; src/kmet/tasks/ is task-only code — the packagers (this pipeline,
-        ;; build_jolt.clj) and the generator entries (generate_models.clj,
-        ;; generate_image_models.clj). Nothing in the app requires it, so it
-        ;; stays out of artifacts.
+        ;; the walk is src/ and nothing else — the app, and only the app. The
+        ;; task implementations live under tasks/ (a classpath root the jar
+        ;; never reads), so no exclusion pattern is needed to keep them out.
         (let [rel (str (fs/relativize "src" p))
               ;; jar entries must use / separators — fs/relativize yields \ on
               ;; Windows, which breaks bb's classpath lookup (kmet/core.clj
               ;; would not resolve from the appended jar)
               entry (str/replace rel "\\" "/")]
-          (when-not (str/starts-with? entry "kmet/tasks/")
-            (.putNextEntry zos (java.util.zip.ZipEntry. entry))
-            (with-open [in (io/input-stream (fs/file p))]
-              (io/copy in zos))
-            (.closeEntry zos))))
+          (.putNextEntry zos (java.util.zip.ZipEntry. entry))
+          (with-open [in (io/input-stream (fs/file p))]
+            (io/copy in zos))
+          (.closeEntry zos)))
       (doseq [j dep-jars]
         (with-open [zf (java.util.zip.ZipFile. (fs/file j))]
           (doseq [e (enumeration-seq (.entries zf))

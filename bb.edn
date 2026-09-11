@@ -1,5 +1,9 @@
 {:min-bb-version "1.12.215"
- :paths ["src" "test"]
+ ;; tasks/ is a second source root, not part of the app: every bb-task
+ ;; implementation lives there (see AGENTS.md § File layout). Both hosts
+ ;; resolve kmet.tasks.* from it, and neither artifact carries it — the
+ ;; uberjar walks src/, jolt's :jolt/build :embed does too.
+ :paths ["src" "test" "tasks"]
  :deps {dev.weavejester/cljfmt {:mvn/version "0.16.5"}
         ;; in-process Maven closure resolution for extension deps.edn
         ;; (0.0.21 = last version without the clojure-tools installer)
@@ -100,24 +104,24 @@
   lint    {:doc "Lint the tree with clj-kondo over BOTH reader views — babashka (the :clj branches) and jolt (the :jolt branches + jolt/) — so either this or `jolt lint` covers common, bb and jolt code. Optionally: specific files/dirs"
            :requires ([kmet.tasks.lint :as lint])
            :task (lint/lint! *command-line-args*)}
-  format  {:doc "Format src/test/extensions with cljfmt (fix in place; optionally: specific files/dirs; generated model_data catalogs excluded)"
+  format  {:doc "Format src/test/tasks/extensions with cljfmt (fix in place; optionally: specific files/dirs; generated model_data catalogs excluded)"
            :requires ([babashka.fs :as fs] [clojure.string :as str] [cljfmt.tool :as fmt])
            :task (let [paths (if (seq *command-line-args*)
                                *command-line-args*
                                ;; enumerate files so generated artifacts stay out:
                                ;; target/, plus the committed provider catalogs ([image_]model_data/) — their exact
                                ;; bytes are sha256-manifested, owned by the generator scripts rather than cljfmt
-                               (->> ["src" "test" "extensions"]
+                               (->> ["src" "test" "tasks" "extensions"]
                                     (mapcat (fn [root] (fs/glob root "**.{clj,cljs,cljc,cljd,bb,edn}")))
                                     (remove (fn [path] (re-find (re-pattern "/target/|/(image_)?model_data/") (str path))))
                                     (mapv str)))]
                    (fmt/fix {:paths paths}))}
-  format-check {:doc "Check src/test/extensions formatting with cljfmt (no changes; optionally: specific files/dirs; generated model_data catalogs excluded)"
+  format-check {:doc "Check src/test/tasks/extensions formatting with cljfmt (no changes; optionally: specific files/dirs; generated model_data catalogs excluded)"
                 :requires ([babashka.fs :as fs] [clojure.string :as str] [cljfmt.tool :as fmt])
                 :task (let [paths (if (seq *command-line-args*)
                                     *command-line-args*
                                     ;; same enumeration as format (target/ + generated model_data excluded)
-                                    (->> ["src" "test" "extensions"]
+                                    (->> ["src" "test" "tasks" "extensions"]
                                          (mapcat (fn [root] (fs/glob root "**.{clj,cljs,cljc,cljd,bb,edn}")))
                                          (remove (fn [path] (re-find (re-pattern "/target/|/(image_)?model_data/") (str path))))
                                          (mapv str)))]
@@ -126,6 +130,6 @@
          :requires ([kmet.tasks.clean :as clean])
          :task (apply clean/-main *command-line-args*)}
   help    {:doc "Show this help"
-           :task (println "kmet - minimal coding agent\n\nTasks:\n  run           Interactive TUI (--help for options)\n  nrepl         Start nREPL server\n  test          Run fast test suites (excludes ^:slow tests; args: var names, ns/var, or whole namespaces)\n  test-ext      Run ONLY slow (^:slow) test suites (args: var names, ns/var, or whole namespaces; pre-commit validation)\n  check         Verify compilation\n  generate-models  Regenerate provider model catalogs from models.dev (network)\n  check-model-data Offline validation of committed provider catalogs + manifest\n  lint          Lint the tree with clj-kondo over BOTH reader views (babashka + jolt; args: files/dirs)\n  format        Format src/test/extensions with cljfmt (fix in place; args: files/dirs)\n  format-check  Check src/test/extensions formatting with cljfmt (no changes; args: files/dirs)\n  dist          Package self-contained executables into dist/ (bb: uberjar + babashka binary; jolt: AOT via `jolt build`)
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run           Interactive TUI (--help for options)\n  nrepl         Start nREPL server\n  test          Run fast test suites (excludes ^:slow tests; args: var names, ns/var, or whole namespaces)\n  test-ext      Run ONLY slow (^:slow) test suites (args: var names, ns/var, or whole namespaces; pre-commit validation)\n  check         Verify compilation\n  generate-models  Regenerate provider model catalogs from models.dev (network)\n  check-model-data Offline validation of committed provider catalogs + manifest\n  lint          Lint the tree with clj-kondo over BOTH reader views (babashka + jolt; args: files/dirs)\n  format        Format src/test/tasks/extensions with cljfmt (fix in place; args: files/dirs)\n  format-check  Check src/test/tasks/extensions formatting with cljfmt (no changes; args: files/dirs)\n  dist          Package self-contained executables into dist/ (bb: uberjar + babashka binary; jolt: AOT via `jolt build`)
   clean         Remove build artifacts, caches, logs and temp files (--dry-run lists only)\n\n  Changed-file dev loop (validation of the current changes only):\n  changed       List files changed since the last commit (git; mtime fallback)\n  test-changed      Run tests of namespaces affected by changed files\n  test-ext-changed  Run ONLY the slow (^:slow) tests of affected namespaces\n  lint-changed      Lint changed files plus affected dependents\n  format-changed    Format changed files in place\n  format-check-changed  Check formatting of changed files\n  changed-baseline  Reset the mtime baseline after a manual full validation (no-op with git)\n  Extension files (source + their own tests) are covered by lint/format and\n  the changed tasks; extension tests run from inside their directories.\n  pack-extension  Verify an extension artifact root and pack it as .jar.")
            :override-builtin true}}}

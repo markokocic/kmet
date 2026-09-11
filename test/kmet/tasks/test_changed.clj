@@ -11,6 +11,11 @@
     (is (= 'kmet.ai.api.openai-completions (changed/path->ns "src/kmet/ai/api/openai_completions.clj"))))
   (testing "test files map to test namespaces"
     (is (= 'kmet.app.test-loop (changed/path->ns "test/kmet/app/test_loop.clj"))))
+  (testing "task files map through their own root (tasks/, not src/)"
+    (is (= 'kmet.tasks.build (changed/path->ns "tasks/kmet/tasks/build.cljc")))
+    (is (= 'kmet.tasks.generate-image-models
+           (changed/path->ns "tasks/kmet/tasks/generate_image_models.clj")))
+    (is (= 'kmet.tasks.test-lint (changed/path->ns "test/kmet/tasks/test_lint.clj"))))
   (testing "extension files map to path-derived namespaces"
     (is (= 'extensions.tools (changed/path->ns "extensions/tools.clj")))))
 
@@ -45,6 +50,14 @@
       (is (contains? nss 'kmet.tasks.build-test)))
     (let [nss (set (changed/affected-test-nss-by '[kmet.tasks.build-jolt]))]
       (is (contains? nss 'kmet.tasks.build-jolt-test))))
+  (testing "tasks/ is a scanned root, so a change in what task code requires reaches it
+            (the closure works across roots, not just src/)"
+    (let [nss (set (changed/affected-test-nss-by '[kmet.libs.archive]))]
+      (is (contains? nss 'kmet.tasks.build-test))
+      (is (contains? nss 'kmet.tasks.build-jolt-test))))
+  (testing "a dev-loop task change reaches its own test"
+    (is (contains? (set (changed/affected-test-nss-by '[kmet.tasks.clean]))
+                   'kmet.tasks.test-clean)))
   (testing "unrelated namespaces stay out"
     (let [nss (set (changed/affected-test-nss-by '[kmet.ai.models]))]
       (is (not (contains? nss 'kmet.tui.components.test-text)))))

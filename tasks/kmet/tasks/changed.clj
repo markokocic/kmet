@@ -2,8 +2,12 @@
   "Dev-loop helper backing the `bb changed` / `bb *-changed` tasks: finds
    changed files and computes, via the require graph, which namespaces are
    affected. Test namespaces map 1:1 to source namespaces (test/kmet/x/test_y.clj
-   ↔ src/kmet/x/y.clj), so a source change must also re-run the tests that
-   transitively require it.
+   ↔ src/kmet/x/y.clj, and test/kmet/tasks/y_test.clj ↔ tasks/kmet/tasks/y.clj),
+   so a source change must also re-run the tests that transitively require it.
+
+   The source roots are src/, tasks/ and extensions/ (see AGENTS.md § File
+   layout — tasks/ holds the task implementations), all scanned as plain
+   directories, so a new root must be added to `source-roots` here.
 
    extensions/ is first-class: its .clj files (source and any tests they
    carry) are part of the lint/format gates and the changed-file scan, and
@@ -23,6 +27,18 @@
 
 (def baseline-file
   ".kmet-changed-baseline")
+
+(def ^:private source-roots
+  "The classpath source roots the changed-file scan and the require graph
+   cover, in glob order. test/ is a root too but holds only tests — its files
+   reach the graph through the same scan (the roots are listed explicitly
+   because `fs/glob` takes one root at a time)."
+  ["src" "test" "tasks" "extensions"])
+
+(def ^:private changed-path-re
+  "Changed-file paths that are lint/format/scan material: a .clj[c] file under
+   one of `source-roots`."
+  #"(?:src|test|tasks|extensions)/.*\.clj[c]?")
 
 (defn- git-repo?
   []
@@ -54,28 +70,29 @@
           (fs/glob dir "*.cljc") (fs/glob dir "**/*.cljc")))
 
 (defn- mtime-changed-files
-  "src/test/extensions .clj files modified after the baseline timestamp
-   (mtime fallback without git; a missing baseline means everything changed)."
+  "The source-roots' .clj files modified after the baseline timestamp (mtime
+   fallback without git; a missing baseline means everything changed)."
   []
   (let [base (try (Long/parseLong (str/trim (slurp baseline-file)))
                   (catch Exception _ 0))]
-    (->> (mapcat dir-clj-files ["src" "test" "extensions"])
+    (->> (mapcat dir-clj-files source-roots)
          (filter #(> (.toMillis (fs/last-modified-time %)) base))
          (map str)
          sort)))
 
 (defn changed-files
   "All changed, still-existing files (git mode: everything vs HEAD; fallback:
-   src/test .clj modified since the last full validation)."
+   source-root .clj files modified since the last full validation)."
   []
   (if (git-repo?)
     (git-changed-files)
     (mtime-changed-files)))
 
 (defn changed-clj-files
-  "Changed .clj/.cljc files under src/, test/ and extensions/."
+  "Changed .clj/.cljc files under the source roots (src/, test/, tasks/,
+   extensions/)."
   []
-  (filter #(re-matches #"(?:src|test|extensions)/.*\.clj[c]?" %) (changed-files)))
+  (filter #(re-matches changed-path-re %) (changed-files)))
 
 (defn mark-validated!
   "Record 'all gates green as of now' for the mtime fallback. No-op with git."
@@ -91,14 +108,15 @@
 
 (defn path->ns
   "Source/test file path to its namespace symbol
-   (src/kmet/app/ui/model_selector.clj → kmet.app.ui.model-selector)."
+   (src/kmet/app/ui/model_selector.clj → kmet.app.ui.model-selector;
+   tasks/kmet/tasks/build.cljc → kmet.tasks.build)."
   [path]
   (symbol
    (-> path
        (str/replace #"\.clj[c]?$" "")
        (str/replace "_" "-")
        (str/replace "/" ".")
-       (str/replace #"^src\.|^test\." ""))))
+       (str/replace #"^src\.|^test\.|^tasks\." ""))))
 
 (defn- read-ns-form
   "First form of PATH (the ns form), or nil when unreadable."
@@ -133,7 +151,7 @@
 
 (defn- scan-graph
   "The require graph (ns → set of required kmet.* nss) and ns → file path,
-   from every src/test/extensions .clj file. Extension namespaces join the
+   from every .clj file under the source roots. Extension namespaces join the
    graph so changes to the extension contract (kmet.extension, kmet.tui.*,
    kmet.libs.*) pull dependent extension files into the lint closure."
   []
@@ -148,7 +166,7 @@
                     (update :paths assoc ns-sym path))
                 acc)))
           {:graph {} :paths {}}
-          (mapcat dir-clj-files ["src" "test" "extensions"])))
+          (mapcat dir-clj-files source-roots)))
 
 (defn- reverse-graph
   "ns → set of namespaces that require it."
@@ -202,7 +220,7 @@
   (affected-test-nss-by (map path->ns (changed-clj-files))))
 
 (defn affected-lint-files
-  "Files to lint: the changed src/test .clj files plus every affected
+  "Files to lint: the changed source-root .clj files plus every affected
    dependent (a changed signature is only flagged at the call site)."
   []
   (let [{:keys [graph paths]} (scan-graph)

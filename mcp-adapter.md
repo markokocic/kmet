@@ -693,7 +693,7 @@ them in that order.
    real `mcp.edn` pointing at the fake servers (TUI: status/search/describe/
    call/connect/disconnect/enable/disable/refresh/auth/logout).
 7. **Quality**: clj-kondo over the extension files (manual — `bb lint` only
-   covers src/test), cljfmt check, plan/README consistency.
+   covers the source roots: src/test/tasks/extensions), cljfmt check, plan/README consistency.
 
 ## 13. Implementation order
 
