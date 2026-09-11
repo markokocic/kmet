@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-04T07:52:20Z"
+ :generated-at "2026-09-11T16:53:55Z"
  :provider {:id :huggingface
             :name "Hugging Face"
             :env-vars ["HF_TOKEN"]
@@ -567,6 +567,61 @@
     :cost {:input 1.32 :output 3.96 :cache-read 0 :cache-write 0}
     :context-window 1000000
     :max-tokens 384000
+    :compat {:supports-developer-role false}}
+   "deepseek-ai/DeepSeek-V4.1-Flash"
+   {:id "deepseek-ai/DeepSeek-V4.1-Flash"
+    :name "DeepSeek V4.1 Flash"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning true
+    :thinking-level-map {:high "high"
+                         :low "low"
+                         :max "max"
+                         :medium nil
+                         :minimal nil
+                         :off "none"
+                         :xhigh "xhigh"}
+    :input [:text :image]
+    :cost {:input 0.3 :output 1.2 :cache-read 0 :cache-write 0}
+    :context-window 1048576
+    :max-tokens 384000
+    :compat {:supports-developer-role false}}
+   "google/gemma-3-12b-it"
+   {:id "google/gemma-3-12b-it"
+    :name "Gemma 3 12B IT"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.05 :output 0.15 :cache-read 0 :cache-write 0}
+    :context-window 131072
+    :max-tokens 131072
+    :compat {:supports-developer-role false}}
+   "google/gemma-3-27b-it"
+   {:id "google/gemma-3-27b-it"
+    :name "Gemma 3 27B IT"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.08 :output 0.16 :cache-read 0 :cache-write 0}
+    :context-window 131072
+    :max-tokens 131072
+    :compat {:supports-developer-role false}}
+   "google/gemma-3-4b-it"
+   {:id "google/gemma-3-4b-it"
+    :name "Gemma 3 4B IT"
+    :provider :huggingface
+    :api :openai-completions
+    :base-url "https://router.huggingface.co/v1"
+    :reasoning false
+    :input [:text :image]
+    :cost {:input 0.05 :output 0.1 :cache-read 0 :cache-write 0}
+    :context-window 131072
+    :max-tokens 131072
     :compat {:supports-developer-role false}}
    "google/gemma-4-26B-A4B-it"
    {:id "google/gemma-4-26B-A4B-it"

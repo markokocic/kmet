@@ -1,5 +1,5 @@
 {:schema-version 1
- :generated-at "2026-09-10T06:38:29Z"
+ :generated-at "2026-09-11T16:53:55Z"
  :provider {:id :commandcode
             :name "Command Code"
             :env-vars ["CMD_API_KEY"]
@@ -270,7 +270,7 @@
                          :medium nil
                          :minimal nil}
     :input [:text]
-    :cost {:input 0.22 :output 0.66 :cache-read 0.007 :cache-write 0}
+    :cost {:input 0.15 :output 0.6 :cache-read 0.003 :cache-write 0}
     :context-window 1000000
     :max-tokens 384000
     :compat {:requires-reasoning-content-on-assistant-messages true
@@ -303,7 +303,7 @@
                          :off nil
                          :xhigh nil}
     :input [:text :image]
-    :cost {:input 0.22 :output 0.66 :cache-read 0.007 :cache-write 0}
+    :cost {:input 0.15 :output 0.6 :cache-read 0.003 :cache-write 0}
     :context-window 1000000
     :max-tokens 384000
     :compat {:requires-reasoning-content-on-assistant-messages true
@@ -332,18 +332,11 @@
     :provider :commandcode
     :api :openai-completions
     :base-url "https://api.commandcode.ai/provider/v1"
-    :reasoning true
-    :thinking-level-map {:high "high"
-                         :low "low"
-                         :max "max"
-                         :medium nil
-                         :minimal nil
-                         :off nil
-                         :xhigh nil}
-    :input [:text :image]
+    :reasoning false
+    :input [:text]
     :cost {:input 0.15 :output 0.6 :cache-read 0.003 :cache-write 0}
     :context-window 1000000
-    :max-tokens 384000
+    :max-tokens 32768
     :compat {:requires-reasoning-content-on-assistant-messages true
              :thinking-format :deepseek}}
    "google/gemini-3.1-flash-lite"
