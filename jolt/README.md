@@ -25,7 +25,9 @@ jolt marks the namespace whose install is loading, and a nested load of
 another provider's install namespace keeps the OUTER provider's mark — with
 the require in place, crypto's registrations were reported as
 `jolt.kmet.providers registers MessageDigest/Signature/… without declaring it`
-under `JOLT_DEBUG` (the general nested-provider case is **jolt#926**).
+under `JOLT_DEBUG` (the general nested-provider case, **jolt#926** — fixed
+upstream in PR #930, merge `899a2204`, `v0.8.6-42`+; the require stays
+dropped for the structural reason above, not for the diagnostics).
 jolt#914 (PR #924, `f85adb51`, `v0.8.6-29`+) is what makes
 this safe: a declared provider resolves its class whatever loaded first, and
 jolt.crypto's own `:jolt/provides` claims resolve its classes on the first
@@ -72,11 +74,13 @@ with no guard at all.
   `java.util.Base64`; the `HttpTimeoutException` claim and the crypto
   classes resolve through their own `:jolt/provides`. The nested-require
   `JOLT_DEBUG` false positives this lib used to show are gone with the
-  `jolt.crypto` require itself (see the section above); the remaining note
-  for `java.util.Base64` is a true statement — the class cannot be claimed,
-  so the guard really is its only install path — but its advice ("declare it
-  in :jolt/provides") is one jolt refuses, which is tracked upstream in
-  **jolt#926** together with the general nested-provider attribution case.
+  `jolt.crypto` require itself (see the section above); the unactionable
+  note that used to fire for `java.util.Base64` went with **jolt#926**
+  (PR #930, merge `899a2204`, `v0.8.6-42`+): the note no longer advises a
+  `:jolt/provides` declaration jolt refuses for a class the runtime
+  implements, and a provider reached from another provider's install
+  namespace is attributed to itself. The guard remains Base64's only
+  install path.
 - **RSA** — now provided by jolt.crypto (merged upstream: jolt-lang/crypto#8,
   merge commit `79ecb3d` — the previous pin was the same tree from the fork):
   RSA keygen via

@@ -2,8 +2,10 @@
 
 Field reports of Clojure-semantics bugs in Jolt (first observed on
 `jolt v0.8.5-36-gbac15682`, threaded Chez 10.x, 2026-09; re-verified on
-`jolt v0.8.6-31-g1e5036a5`, 2026-09-10 — JOLT-1..JOLT-5 are fixed there,
-JOLT-6 and JOLT-7 still open), each with a minimal repro, the expected
+`jolt v0.8.6-55-ga2a51bde`, 2026-09-11 — JOLT-1..JOLT-5 and JOLT-7 are
+fixed upstream; JOLT-6, JOLT-8 and JOLT-9 are open, the last two
+Android/bionic-only), each with a minimal
+repro, the expected
 Clojure/babashka behavior, and the kmet test it broke.
 All were discovered by running kmet's test suite under Jolt (`jolt test`);
 bb/JVM is the reference implementation (real Clojure semantics).
@@ -286,11 +288,129 @@ string on bb but loads as a BigInt on jolt. Failing test:
 `kmet.libs.test-yaml/test-numbers`. Any `(if-let [n (parse-long s)] …)`
 call site silently changes type category instead of taking the nil branch.
 
-**Status:** open — filed upstream as **[jolt#927](https://github.com/jolt-lang/jolt/issues/927)**
-(re-verified 2026-09-10 on `v0.8.6-31-g1e5036a5`; not covered by jolt's own
-tests either: `test/chez/corpus.edn` has no overflow row for the parse fns
-and `known-divergences.edn` has no entry, so `make certify` cannot see it).
-kmet-side workaround APPLIED 2026-09-09 (`4f900ed`):
-`kmet.libs.num/parse-long` wraps core's and returns the value only when
-it is a `Long`, nil otherwise — both hosts then get JVM semantics. The
-wrapper stays until a jolt fix lands.
+**Status:** FIXED upstream — **[jolt#927](https://github.com/jolt-lang/jolt/issues/927)**,
+PR #932 (merge `684f6ea0`, `v0.8.6-54`+, verified 2026-09-10): the value is
+range-checked against the long bounds, so `parse-long` answers nil past them
+as the JVM does. The same PR put every `java.lang` integer parser on one
+Java grammar (a `1e3`/`#xff`/`" 5"` no longer parse, an out-of-range value
+fails instead of widening, `Long/decode` and siblings exist). kmet-side
+workaround APPLIED 2026-09-09 (`4f900ed`) — `kmet.libs.num/parse-long`
+wrapped core's and returned the value only when it is a `Long` — and
+**REMOVED** 2026-09-10 after rebasing onto the fix: `kmet.libs.yaml` is back
+on plain core `parse-long` (`kmet.libs.num` keeps only `finite?`). The
+repro above, re-run on `v0.8.6-55-ga2a51bde`: the two overflow lines read
+`nil` and `(class …)` reads `nil`.
+
+---
+
+## JOLT-8 — `jolt.ffi/errno` reads glibc's `__errno_location`; bionic exports `__errno`
+
+**Area:** `stdlib/jolt/ffi.clj` — the `errno` accessor `jolt.io-poller` and
+jolt-lang/http-client read after a failing `recv`/`send`/`poll`.
+
+**Repro (Termux/Android):**
+
+```clojure
+(require '[jolt.io-poller :as p])
+(p/errno)
+;; bb:   (an int — 0 or whatever the last syscall left)
+;; jolt: Unhandled exception (RuntimeException):
+;;       foreign-procedure: no entry for "__errno_location"
+```
+
+`readelf -sW /system/lib64/libc.so | grep -w __errno` shows bionic exports
+`__errno` (and `__errno@@LIBC`) only — no `__errno_location`.
+
+**Expected vs actual:** `errno` picks its accessor by `os.name`:
+`"Mac OS X"` → `__error`, `"Windows"` → `_errno`, else glibc's
+`__errno_location`. Android reports `os.name` **"Linux"** while its libc is
+bionic, so the Linux branch resolves a symbol that is not there and every
+errno read throws. On glibc/macOS nothing changes; the bug is Android-only.
+
+**kmet impact:** surfaced by `kmet.libs.test-http`'s
+`test-follow-redirects-default` (the stale-pooled-connection retry reads
+errno through `jolt.http.net/recv-bytes`) once the JOLT-9 connect fix let
+the HTTP tests reach a real recv path: 1 error, and a live transport
+failure on any recv/send error.
+
+**Fix (verified 2026-09-11):** resolve the accessor on first use — try
+glibc's spelling, fall back to `__errno` when the foreign-procedure has no
+entry — and cache it (a delay; `errno` runs on hot paths). The same commit
+adds `__errno` to `host/chez/java/process.ss`'s `proc-errno-loc` fallback
+chain (on bionic it was `#f`, so `proc-errno` read 0 and the EINTR retries
+around `waitpid`/read/write never fired).
+
+**Status:** fix prepared upstream — the maintained container is the
+**`patchset` branch** (tip `b36ef75f`, CHANGELOG-free) on `markokocic/jolt`,
+alongside the single-patch `fix/bionic-errno` (`a4261e4d`, one commit on
+jolt main `684f6ea0`). Open a PR from either at
+<https://github.com/jolt-lang/jolt/compare/main...markokocic:jolt:patchset?expand=1>
+(patch + PR body in `~/tmp/jolt-bionic-patches/`). Not filed yet (the
+available token cannot create issues/PRs upstream). Pre-existing: the same
+probe at `v0.8.6-32-gc4ebc570` (source mode, `bin/jolt`) throws the same
+`no entry for "__errno_location"`, so this is not a regression from the
+#926/#927 rebase.
+
+---
+
+## JOLT-9 — jolt-lang/http-client's `getaddrinfo` walk reads glibc's `ai_addr` offset; bionic's `struct addrinfo` is BSD-ordered
+
+**Area:** jolt-lang/http-client `src/jolt/http/net.clj` (`O-ai-addr`) — the
+BSD-socket layer under `jolt.http.platform` / `jolt.http.tls`, i.e. every
+`java.net.http` request babashka.http-client makes on Jolt.
+
+**Repro (Termux/Android).** The layout is a libc fact, so ask the host's
+headers for it:
+
+```c
+/* cc aiprobe.c && ./aiprobe */
+#include <netdb.h>
+#include <stdio.h>
+#include <stddef.h>
+int main(void) {
+  printf("ai_addrlen=%zu ai_canonname=%zu ai_addr=%zu ai_next=%zu\n",
+         offsetof(struct addrinfo, ai_addrlen), offsetof(struct addrinfo, ai_canonname),
+         offsetof(struct addrinfo, ai_addr), offsetof(struct addrinfo, ai_next));
+}
+;; bionic:  ai_addrlen=16 ai_canonname=24 ai_addr=32 ai_next=40   (BSD order)
+;; glibc:   ai_addrlen=16 ai_addr=24 ai_canonname=32 ai_next=40
+```
+
+The shim hardcodes `(def O-ai-addr (if macos? 32 24))`: `os.name` is
+"Linux" on Android, so it reads offset 24 — `ai_canonname`, NULL because
+the shim requests no canonical name — and hands `connect(2)` a NULL
+sockaddr:
+
+```clojure
+(require '[jolt.http.net :as net])
+(net/connect "example.com" 443)
+;; jolt/bionic: connection refused: example.com:443   (connect returned -1, errno 14 EFAULT)
+;; expected:    an open fd
+```
+
+Every address getaddrinfo returned fails (EFAULT), the walk reports
+"connection refused", and so **every** platform-transport request fails on
+Android — `kmet.libs.test-http` was 4F + 10E, `kmet.ai.test-oauth`
+5F + 12E. The timed-connect path is not merely slow here: a failed connect
+leaves the socket unconnected, `poll(POLLOUT)` reports it writable, and
+`SO_ERROR` reads 0, so the timeout path can report a phantom success.
+
+**Fix (verified 2026-09-11):** probe the entry instead of trusting
+`os.name` — offset 24 (glibc) is used only when it holds a non-null pointer
+whose first two bytes are `AF_INET` (2) or `AF_INET6` (10); the BSD order
+(32) otherwise, cached after the first probe.
+
+**Status:** fix prepared upstream — branch `fix/bionic-addrinfo` (commit
+`4958c9d`, based on http-client main `4744256`) in `~/tmp/http-client-fix`,
+with patch + bundle + PR body in `~/tmp/jolt-bionic-patches/`. **Not
+pushed**: `markokocic/http-client` does not exist and the token has no
+fork permission — create the fork
+(<https://github.com/jolt-lang/http-client/fork>) and run
+`~/tmp/jolt-bionic-patches/finish-http-client-pr.sh`. The same patch is
+applied to the gitlibs checkout
+`~/.jolt/gitlibs/https___github.com_jolt-lang_http-client.git/4744256f83e5cf9d3692f4f91e3d7df3c6d41da8`
+— a jolt dep re-fetch may reset it). With it: `kmet.libs.test-http`
+25 tests / 90 assertions green (was 4F + 10E), `kmet.ai.test-oauth` green,
+`kmet.app.ui.test-session-selector` 31/130 green (was 4F). Pre-existing:
+the same connect at `v0.8.6-32-gc4ebc570` (source mode, `bin/jolt`) fails
+with errno 14 too, so this is not a regression from the #926/#927 rebase.

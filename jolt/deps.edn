@@ -11,7 +11,9 @@
  ;; 2026-09-10): the first-form require existed only while jolt.kmet.providers
  ;; re-registered crypto's asymmetric classes, and it made JOLT_DEBUG
  ;; misattribute crypto's registrations to this provider (a nested load of
- ;; another provider's install ns keeps the outer provider's mark — jolt#926). Since
+ ;; another provider's install ns keeps the outer provider's mark — jolt#926,
+ ;; fixed upstream in PR #930; the require stays gone for the structural
+ ;; reason above). Since
  ;; jolt#914 (PR #924) crypto's own :jolt/provides claims resolve its classes
  ;; on the first reference, whatever loaded first — RFC 0014 gives a class one
  ;; provider, and a declared provider owns the members it registers. jolt

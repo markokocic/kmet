@@ -27,9 +27,9 @@
    reported as `jolt.kmet.providers registers MessageDigest/Signature/…
    without declaring it`. crypto's classes resolve through crypto's own
    :jolt/provides claims on the first reference (jolt#914), so this ns
-   needs only jolt.host and clojure.core. The nested-load attribution — the
-   reason the require had to go for the diagnostics to read right — is
-   jolt#926.
+   needs only jolt.host and clojure.core. That nested-load attribution —
+   jolt#926 — is fixed upstream (PR #930, merge 899a2204, v0.8.6-42+); the
+   require stays gone because it was structural only, not for diagnostics.
 
    java.util.Base64 cannot be claimed (jolt refuses claims on classes the
    runtime implements), so kmet's guarded requires — kmet.libs.crypto,
