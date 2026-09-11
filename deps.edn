@@ -23,8 +23,7 @@
         ;; OpenSSL-backed javax.crypto/java.security shims on Jolt
         ;; (MessageDigest, Mac, Cipher, SecureRandom, EC + RSA
         ;; Signature/KeyPairGenerator/KeyFactory — RFC 0014; inert on bb/JVM).
-        ;; RSA (keygen + SHA*withRSA + RSA KeyFactory) rides the upstream
-        ;; main as of the PR #8 merge (79ecb3d).
+        ;; RSA (keygen + SHA*withRSA + RSA KeyFactory) comes from the library.
         io.github.jolt-lang/crypto {:git/url "https://github.com/jolt-lang/crypto.git"
                                     :git/sha "79ecb3da8c26c76d8934691bc79a0c030104a9f8"}
         ;; babashka.http-client on Jolt: the jolt-lang/http-client library's
@@ -36,25 +35,14 @@
         ;; Jolt — curl stays only for SOCKS/https-scheme proxies and live
         ;; :as :stream feeds (jolt-port.md B1).
         org.babashka/http-client {:mvn/version "0.4.24"}
-        ;; TEMPORARY (2026-09-11): markokocic's fork, branch
-        ;; fix/bionic-addrinfo — the upstream `ai_addr` offset is glibc's
-        ;; (24), while bionic's struct addrinfo is BSD-ordered (32), so
-        ;; connect(2) gets a NULL sockaddr and every platform-transport
-        ;; request fails EFAULT on Android/Termux (JOLT-9). The
-        ;; branch is ONE commit on upstream main 4744256; the PR is now
-        ;; jolt-lang/http-client#19 (open, **not merged** as of 2026-09-11 —
-        ;; upstream main is still 4744256, re-checked 2026-09-11). Revert
-        ;; these two lines to `jolt-lang/http-client` + the upstream sha once
-        ;; it merges:
-        ;; https://github.com/jolt-lang/http-client/pull/19
-        io.github.jolt-lang/http-client {:git/url "https://github.com/markokocic/http-client.git"
-                                         :git/sha "4958c9d2730f05078143ed3f2b194b19aa8d0ba2"}
+        ;; The shims behind babashka.http-client on Jolt (upstream main).
+        io.github.jolt-lang/http-client {:git/url "https://github.com/jolt-lang/http-client.git"
+                                         :git/sha "b98833b8338b66d435cdbffa480ba2b59c005a2e"}
         ;; kmet's own RFC 0014 provider lib (jolt/ dir): the JDK classes the
         ;; jolt ecosystem lacks — Base64 MIME decode and the
-        ;; HttpTimeoutException ctor (RSA used to be here; jolt.crypto
-        ;; provides it now). It requires nothing but jolt.host: crypto's
-        ;; classes resolve through crypto's own :jolt/provides claims
-        ;; (jolt#914). Inert on bb/JVM.
+        ;; HttpTimeoutException ctor. It requires nothing but jolt.host:
+        ;; crypto's classes resolve through crypto's own :jolt/provides
+        ;; claims. Inert on bb/JVM.
         jolt.kmet/providers {:local/root "jolt"}}
  :aliases
  {:dev {:extra-paths ["test"]}}}

@@ -9,8 +9,8 @@ block). Source comments describe the local *why* without ticket numbers —
 grep this file to find what `file:line` belongs to which ticket.
 
 Historical labels from the deleted `bb-jolt.md` map as: `JOLT-10`→#945,
-`JOLT-11`→#946, `JOLT-12`→#947, `JOLT-13`→#944, `JOLT-1`…`JOLT-9` → the
-resolved table; git history has the full field reports.
+`JOLT-11`→#946, `JOLT-12`→#947, `JOLT-13`→#944; git history has the full
+field reports.
 
 ## Filed by kmet — open
 
@@ -208,38 +208,3 @@ keeps the `\r` in captures and misses anchors at CR — the same engine as the
 **Workaround:** `src/kmet/libs/http.cljc:505–:535` (`parse-dump-header`)
 trims every captured header value.
 When fixed: drop the trim.
-
-## Filed upstream by others — open (kmet tracks and pins)
-
-### [jolt-lang/http-client#19](https://github.com/jolt-lang/http-client/pull/19) — bionic `struct addrinfo` is BSD-ordered, the `getaddrinfo` walk reads glibc's `ai_addr` offset
-
-**Area:** http-client transport (Android/bionic)
-
-**Impact:** every platform-transport request fails EFAULT on
-Android/Termux — connect(2) gets a NULL sockaddr.
-
-**Workaround** (`deps.edn`, the `io.github.jolt-lang/http-client` entry):
-pin `markokocic/http-client` `fix/bionic-addrinfo` (`4958c9d`) instead of
-upstream.
-When merged: revert to `jolt-lang/http-client` + the upstream sha.
-
-## Resolved upstream (record)
-
-All workarounds for these were removed when the fix landed (or were never
-needed) — nothing left to clean up.
-
-| ticket | what | landed |
-|---|---|---|
-| [jolt#914](https://github.com/jolt-lang/jolt/issues/914) + [PR #924](https://github.com/jolt-lang/jolt/pull/924) | provider load order: a declared provider's class resolves whatever loaded first (hold-then-replay) | merge `f85adb51`, `v0.8.6-29`+ |
-| [PR #922](https://github.com/jolt-lang/jolt/pull/922) | `Matcher.find(int)` scans from the index; `.region` / `.regionStart` / `.regionEnd` / no-arg `.reset` | merge `1e5036a5`, `v0.8.6-31`+ |
-| [jolt#926](https://github.com/jolt-lang/jolt/issues/926) + [PR #930](https://github.com/jolt-lang/jolt/pull/930) | `JOLT_DEBUG` misattributed a nested provider's registrations; class the runtime implements no longer gets the "declare it" note | merge `899a2204`, `v0.8.6-42`+ |
-| [jolt#927](https://github.com/jolt-lang/jolt/issues/927) + [PR #932](https://github.com/jolt-lang/jolt/pull/932) | `clojure.core/parse-long` returned a BigInt on overflow (now nil) | merge `684f6ea0`, `v0.8.6-54`+ |
-| [PR #933](https://github.com/jolt-lang/jolt/pull/933) | SCI interpreter interop: `Reflector/getMethods` + companions | commit `847d9499`, merge `0f7d1a11` |
-| [PR #936](https://github.com/jolt-lang/jolt/pull/936) | spawned subprocesses inherited every open fd (no CLOEXEC) | commit `803d8743` |
-| [PR #939](https://github.com/jolt-lang/jolt/pull/939) | bionic exports `__errno`, not glibc's `__errno_location` — errno reads threw on Android | merge `3f7fc672`, `v0.8.6-67`+ |
-| [jolt-lang/crypto#8](https://github.com/jolt-lang/crypto/pull/8) | RSA keygen + `SHA*withRSA` + RSA `KeyFactory` in jolt.crypto | merge `79ecb3d` |
-
-Also fixed in `v0.8.6` with no ticket tracked here: the single-arg
-`java.net.URI` ctor accepting illegal characters; the edn reader dropping a
-trailing `@`; kwargs map destructuring throwing on an odd trailing argument;
-`format`'s missing `%g` conversion.

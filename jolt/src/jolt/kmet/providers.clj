@@ -1,5 +1,5 @@
 (ns jolt.kmet.providers
-  "kmet's RFC 0014 provider (jolt-port.md §8 cause 1, jolt/README.md): the
+  "kmet's RFC 0014 provider (jolt-port.md §9, jolt/README.md): the
    JDK classes the jolt ecosystem does not supply that kmet's
    crypto/oauth/ADC paths need.
 
@@ -11,25 +11,14 @@
        registers no constructor; kmet's transport-error classifier keys off
        the simple name.
 
-   RSA used to be planned here; jolt.crypto provides it now (EC and RSA
-   keygen/Signature/KeyFactory, 2026-09), so the claims for those classes
-   moved to jolt.crypto's own :jolt/provides — jolt allows a class a single
-   provider. The JWK bigint->DER conversion jolt's Long-backed small bigints
-   broke (.toByteArray) is handled in kmet.libs.crypto/bigint->bytes, which
-   works on both hosts.
+   RSA is not provided here: jolt.crypto supplies it (EC and RSA
+   keygen/Signature/KeyFactory) and claims those classes itself — jolt
+   allows a class a single provider.
 
-   NO jolt.crypto REQUIRE (dropped 2026-09-10). The first-form require was
-   structural only while this ns re-registered crypto's asymmetric classes
-   (last-wins merge); once those moved to crypto it bought nothing, and it
-   made jolt's JOLT_DEBUG diagnostics misattribute crypto's registrations:
-   a nested load of another provider's install namespace keeps the OUTER
-   provider's lib-loading-provider mark, so crypto's registrations were
-   reported as `jolt.kmet.providers registers MessageDigest/Signature/…
-   without declaring it`. crypto's classes resolve through crypto's own
-   :jolt/provides claims on the first reference (jolt#914), so this ns
-   needs only jolt.host and clojure.core. That nested-load attribution —
-   jolt#926 — is fixed upstream (PR #930, merge 899a2204, v0.8.6-42+); the
-   require stays gone because it was structural only, not for diagnostics.
+   NO jolt.crypto REQUIRE: this ns needs only jolt.host and clojure.core.
+   crypto's classes resolve through crypto's own :jolt/provides claims on
+   the first reference, and a declared provider owns the members it
+   registers, so no require is needed to pin an order.
 
    java.util.Base64 cannot be claimed (jolt refuses claims on classes the
    runtime implements), so kmet's guarded requires — kmet.libs.crypto,

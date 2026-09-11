@@ -16,7 +16,7 @@
             [clojure.string :as str]))
 
 ;; (jolt only) Install kmet's Base64 shim before this file's class references
-;; analyze. Since jolt#914 the crypto classes used below (KeyFactory,
+;; analyze. The crypto classes used below (KeyFactory,
 ;; Signature) autoload jolt.crypto through its own :jolt/provides claims and
 ;; HttpTimeoutException autoloads jolt.kmet.providers' claim — but a claim on
 ;; java.util.Base64 is refused (the runtime implements the class), so its

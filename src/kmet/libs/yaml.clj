@@ -114,7 +114,7 @@
   "Resolve a plain (unquoted) scalar per pi's yaml package (YAML 1.2 core
    subset): strings, booleans incl. case variants, null, ints, floats.
    Overflowing ints fall back to the string (parse-long is nil on
-   overflow on both hosts — jolt#927)."
+   overflow on both hosts)."
   [s]
   (let [s (str/trim s)]
     (cond

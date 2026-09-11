@@ -2,9 +2,7 @@
 
 Goal: one portable **Loader** abstraction that gives kmet's extension system
 real isolation on every host — bb, JVM Clojure and Jolt — and that can be
-promoted to a standalone library afterwards. It is the answer to two open
-items: Jolt issue **jolt-lang/jolt#912** ("Provide Classloader lite for Jolt":
-per-context classpath, resolve-fn, isolation, unload) and the
+promoted to a standalone library afterwards. It is the answer to the
 **extension-isolation** workstream in `jolt-port.md` §B3 (a hard blocker for
 the port).
 
@@ -383,7 +381,7 @@ so a Java shim (or `DynamicClassLoader`) is required for that one method;
 overridden `getResource`/`getResources` are seen by `clojure.java.io/resource`
 and `Class/forName(name, false, l)`.
 
-### 6.1 Jolt native backend (the #912 path)
+### 6.1 Jolt native backend
 
 Jolt already has the *shape*: `the-classloader` is a `jhost` record with a
 registered method table (`getResource`, `getResources`, `getParent` → nil,
@@ -782,7 +780,7 @@ upgrades that must satisfy the same suite.
 - Suite runs on the JVM for cases 1–8, 10; case 3 (shared var) via the sci
   half.
 
-### Phase 3 — Jolt native backend (the #912 work)
+### Phase 3 — Jolt native backend
 
 **Detailed design and per-stage file/gate lists: §6.1** (state inventory
 §6.1.2, the two ctx-propagation mechanisms §6.1.4, gotchas §6.1.9, stage

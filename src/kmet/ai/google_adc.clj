@@ -19,7 +19,7 @@
 ;; no :jolt/provides claim can fix (the runtime implements the class, so jolt
 ;; refuses the claim — the guarded require is its only install path). The
 ;; crypto classes here (Signature "SHA256withRSA", KeyFactory) autoload
-;; jolt.crypto through its own claims since jolt#914. See kmet.libs.crypto
+;; jolt.crypto through its own claims. See kmet.libs.crypto
 ;; for the full rationale; the require is guarded by the jolt-version marker
 ;; so bb never sees jolt.* namespaces.
 (when (find-var 'clojure.core/*jolt-version*)

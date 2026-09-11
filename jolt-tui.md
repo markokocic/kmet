@@ -76,7 +76,7 @@ Verified with the pty scripts (`scripts/pty_capture.py`):
 | `jolt test kmet.libs.test-terminal` | 4 tests / 17 assertions green (decoder) |
 | `jolt test kmet.tui.test-terminal-native` | 1 test / 5 assertions green (tty-free surface) |
 | `jolt test-ext kmet.tui.test-terminal-native` | 1 test / 4 assertions green (nested jolt in a real pty) |
-| `jolt test-ext kmet.tui.test-render-loop` | **5 tests / 30 assertions green — was 5 errors on `Unknown class TerminalBuilder`** (the suite now drives a protocol stub, no JLine) |
+| `jolt test-ext kmet.tui.test-render-loop` | **5 tests / 30 assertions green** (the suite drives a protocol stub, no JLine) |
 | real kmet TUI on Jolt | `jolt run -m kmet.core` in a pty: renders, `/quit` exits 0, cursor restored (`\u001b[?25h`) |
 | suspend/resume shape | create → raw → read → stop, twice in one process: both rounds read their input |
 
@@ -96,8 +96,8 @@ terminal stopped; bounded by user actions).
 test spawns a hardcoded `bb run` through a pty, so on the Jolt host it
 exercises bb's TUI, not Jolt's. It fails because its stages need ~20s while
 the Jolt runner kills each namespace after 15s (`kmet.runner`: `deref f
-15000`). Not a terminal gap. The one real Jolt-red TUI suite was
-`kmet.tui.test-render-loop`, now green.
+15000`). Not a terminal gap. `kmet.tui.test-render-loop` is green on
+`jolt test-ext`.
 
 ### The portable core (verified 2026-09-10, unchanged)
 
@@ -732,8 +732,8 @@ re-runs (`hiccup/render-lines`, no tty, no sleeps).
   `jolt.ffi` (ncurses 6.0 subset only; Unix-only per its `:jolt/native`
   entries). Requires jolt ≥0.7.24 (older jolts exported the kernel's own
   ncurses symbols, so an FFI-loaded ncursesw bound back into them →
-  `initscr` "Error opening terminal" or segfault; fixed with
-  `--exclude-libs` in `build.ss:386-411` — verified in-tree).
+  `initscr` "Error opening terminal" or segfault — `--exclude-libs`
+  (`build.ss:386-411`, verified in-tree) keeps them out).
   Rejected as the kmet backend: fullscreen `initscr` takeover vs the inline
   ANSI/scrollback model, ncurses `wgetch` codes vs Kitty/modifyOtherKeys/
   OSC/2026-sync/images, indexed colour only, no bracketed-paste decode,
