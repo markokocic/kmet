@@ -1,7 +1,7 @@
-(ns kmet.build-jolt
+(ns kmet.tasks.build-jolt
   "Build the self-contained kmet executable for the jolt host — the jolt half
    of the `dist` task (bb.edn branches on *jolt-version*: `jolt dist` lands
-   here, `bb dist` lands in kmet.build).
+   here, `bb dist` lands in kmet.tasks.build).
 
    Where the babashka packager downloads the official babashka binary and
    appends target/kmet.jar, this one drives jolt's own AOT build, which links
@@ -10,7 +10,7 @@
    compile is the whole build — so the packager owns what the CLI does not:
 
    - the version-stamped artifact name in dist/ (`kmet-<ver>-jolt<jv>-<slug>`,
-     jolt in the slot kmet.build fills with bb<version>, so one dist/ carries
+     jolt in the slot kmet.tasks.build fills with bb<version>, so one dist/ carries
      both hosts' artifacts side by side);
    - a stable scratch dir under target/jolt/, so jolt's incremental build (and
      its <out>.build payload dir) survives across runs and never lands in dist/;
@@ -36,7 +36,7 @@
             [clojure.string :as str]
             ;; shared with the babashka packager: one artifact-version rule
             ;; (git tag -> date-hash -> \"dev\") and one termux probe
-            [kmet.build :as build]))
+            [kmet.tasks.build :as build]))
 
 (def ^:private dist-dir "dist")
 (def ^:private scratch-root "target/jolt")
@@ -51,7 +51,7 @@
 
 (defn slug-for
   "Dist slug for an os.name/os.arch pair (case-insensitive), or nil when the
-   pair is not one we name. Unlike kmet.build/slug-for this names the RUNNING
+   pair is not one we name. Unlike kmet.tasks.build/slug-for this names the RUNNING
    platform rather than a babashka release asset — there is no -static variant,
    since a jolt binary always carries its own runtime."
   [os arch]
@@ -108,7 +108,7 @@
 
 (defn artifact-base
   "Dist artifact base name, no extension: kmet-<ver>-jolt<jolt-ver>-<slug>.
-   Same shape as kmet.build/artifact-base with jolt in bb's slot; a dev build is
+   Same shape as kmet.tasks.build/artifact-base with jolt in bb's slot; a dev build is
    tagged, because it is a different artifact under the same sources."
   [ver jolt-ver slug {:keys [dev?]}]
   (str "kmet-" ver "-jolt" (or jolt-ver "dev") "-" slug (when dev? "-dev")))
@@ -297,7 +297,7 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" \"$@\"
 
 (defn -main
   "jolt dist [options]   (the bb.edn task's jolt branch; the babashka branch
-   runs kmet.build/-main)
+   runs kmet.tasks.build/-main)
 
    Build the self-contained kmet executable for the jolt host into dist/ —
    the jolt counterpart of the babashka packager. jolt AOT-compiles the app

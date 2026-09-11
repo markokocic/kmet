@@ -65,7 +65,7 @@ Empirical facts the implementation depends on (verified against CLI 0.26.13):
    CLI 0.26.13).
 6. On Termux the released `tree-sitter-cli-linux-arm64` binary needs the
    glibc loader: `<prefix>/glibc/lib/ld-linux-aarch64.so.1 --library-path …`
-   — same launcher pattern `kmet.build` already emits for babashka itself.
+   — same launcher pattern `kmet.tasks.build` already emits for babashka itself.
 7. CLI subcommands have NO grammar/binary auto-download; acquisition is
    entirely our extension's job (below).
 

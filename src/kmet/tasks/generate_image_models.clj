@@ -1,6 +1,7 @@
-;; scripts/generate_image_models.clj — regenerate
-;; src/kmet/ai/image_model_data/image-models.edn from the OpenRouter API
-;; (pi: packages/ai/scripts/generate-image-models.ts).
+;; kmet.tasks.generate-image-models — the `bb generate-image-models` task entry:
+;; regenerate src/kmet/ai/image_model_data/image-models.edn from the OpenRouter
+;; API (pi: packages/ai/scripts/generate-image-models.ts). Task-only code (kept
+;; out of the uberjar); the shipped app never loads it.
 ;;
 ;; Keeps models whose output modalities include "image"; input/output
 ;; modalities from architecture (defaulting input to [:text]); cost =
@@ -9,7 +10,7 @@
 ;;
 ;; Run via: bb generate-image-models (network)
 
-(ns generate-image-models
+(ns kmet.tasks.generate-image-models
   (:require [babashka.fs :as fs]
             [kmet.libs.json :as json]
             [clojure.edn :as edn]

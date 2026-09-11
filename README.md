@@ -223,6 +223,9 @@ src/kmet/
 │   │                     usage docs in src/kmet/tui/tui.md)
 │   └── components/     — text, input, editor, markdown, select/settings
 │                         lists, spinner, image, stack layouts, ...
+└── tasks/              — bb-task implementations: packagers (uberjar/dist/
+                          pack-extension) + the catalog generators; never in
+                          the shipped app or the jar
 ```
 
 The full annotated layout (every file) lives in `AGENTS.md`.
@@ -344,6 +347,7 @@ bb test-ext        # Run only the slow (^:slow) test suites
 bb lint            # clj-kondo over both reader views (babashka + jolt);
                    # `jolt lint` runs the same gate
 bb format          # cljfmt (fix) / bb format-check (verify)
+bb clean           # Remove build artifacts, caches, logs (--dry-run: list only)
 bb generate-models     # Regenerate provider catalogs (network)
 kmet --generate-models # Refresh the user-level catalog cache (network)
 bb generate-image-models # Regenerate the image model catalog (network)

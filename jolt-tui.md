@@ -84,7 +84,7 @@ Follow-ups: re-verify on Termux/bionic (this run was glibc/WSL2;
 `cfmakeraw` exists in bionic but confirm on device), Windows (§6), and a
 Jolt-host variant of the pty app smoke (the existing
 `modes.test-overlay-input-smoke` spawns `bb run`, and its ~20 s of stages
-exceed the Jolt runner's 15 s per-namespace timeout — `kmet.runner`).
+exceed the Jolt runner's 15 s per-namespace timeout — `kmet.tasks.runner`).
 Known divergences from the JLine backend: it uses stdin/stdout directly
 (pi does the same — JLine instead opens the system terminal, so a
 redirected stdout would still reach `/dev/tty` there), and it registers
@@ -95,7 +95,7 @@ terminal stopped; bounded by user actions).
 `kmet.modes.test-overlay-input-smoke` is *not* blocked by the adapter: the
 test spawns a hardcoded `bb run` through a pty, so on the Jolt host it
 exercises bb's TUI, not Jolt's. It fails because its stages need ~20s while
-the Jolt runner kills each namespace after 15s (`kmet.runner`: `deref f
+the Jolt runner kills each namespace after 15s (`kmet.tasks.runner`: `deref f
 15000`). Not a terminal gap. `kmet.tui.test-render-loop` is green on
 `jolt test-ext`.
 

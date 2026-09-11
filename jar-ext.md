@@ -261,7 +261,7 @@ the prompt per turn anyway).
 ## 6. Packaging: `bb pack-extension`
 
 - New `bb pack-extension <src-dir> [out.jar]` task; implementation lives
-  in `kmet.build` (already owns archive/zip concerns) or a small sibling
+  in `kmet.tasks.build` (already owns archive/zip concerns) or a small sibling
   ns it requires — either way host-evaluated bb code using
   `java.util.zip.ZipOutputStream` (deterministic sorted order, no
   `META-INF`, no permission preservation needed).
@@ -306,7 +306,7 @@ the prompt per turn anyway).
 - Extension self-tests run from their wrappers unchanged
   (`bb.edn :paths ["src" "test" ...]` still resolves); only moved-path
   references update.
-- `test/kmet/changed.clj`: no change needed (globs already cover
+- `test/kmet/tasks/changed.clj`: no change needed (globs already cover
   `extensions/**/*.clj`; flat root files like `edit_tool.clj` map to
   their namespaces correctly).
 

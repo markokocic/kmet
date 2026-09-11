@@ -999,7 +999,7 @@ invocations.
   `timers/pump!` by hand instead of waiting for a real interval, so timer
   assertions are deterministic. Clean up with `timers/cancel-all!` in a
   fixture when a case arms timers directly.
-- New test namespaces register in `kmet.runner/all-namespaces`.
+- New test namespaces register in `kmet.tasks.runner/all-namespaces`.
 
 ---
 

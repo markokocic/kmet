@@ -1,6 +1,6 @@
 (ns kmet.libs.test-archive
   ;; Zip extraction tests for the bb-only kmet.libs.archive (java.util.zip).
-  ;; Vars carry ^:bb-only — kmet.runner skips them on the jolt host.
+  ;; Vars carry ^:bb-only — kmet.tasks.runner skips them on the jolt host.
   (:require [babashka.fs :as fs]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is]]

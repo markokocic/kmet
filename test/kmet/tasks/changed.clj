@@ -1,4 +1,4 @@
-(ns kmet.changed
+(ns kmet.tasks.changed
   "Dev-loop helper backing the `bb changed` / `bb *-changed` tasks: finds
    changed files and computes, via the require graph, which namespaces are
    affected. Test namespaces map 1:1 to source namespaces (test/kmet/x/test_y.clj
@@ -169,7 +169,7 @@
 
 (defn- test-ns?
   "True for a test namespace: the conventional test-* last segment, or the
-   -test suffix (kmet.build-test / kmet.build-jolt-test mirror their src
+   -test suffix (kmet.tasks.build-test / kmet.tasks.build-jolt-test mirror their src
    namespace, so the suffix is the only marker they carry — without it the
    changed-file loop never selects them, even when they themselves changed)."
   [ns-sym]

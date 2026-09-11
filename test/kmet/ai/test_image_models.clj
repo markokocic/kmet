@@ -1,24 +1,19 @@
 (ns kmet.ai.test-image-models
   "Deferred B: image models registry — catalog loading + offline validation
-   (the generator script's validate-committed! is the single source of
-   truth), the registry semantics, the :openrouter-images wire (mocked
-   HTTP), usage/cost, and the never-throw generate-images contract."
+   (the generator's validate-committed! is the single source of truth), the
+   registry semantics, the :openrouter-images wire (mocked HTTP), usage/cost,
+   and the never-throw generate-images contract."
   (:require [clojure.string :as str]
             [clojure.test :as t :refer [testing]]
             [kmet.ai.auth :as auth]
             [kmet.ai.image-models :as im]
-            [kmet.libs.http :as http]))
+            [kmet.libs.http :as http]
+            [kmet.tasks.generate-image-models :as gen-image-models]))
 
 (defn- validate-committed!
-  "Run the generator script's offline validation over the committed catalog."
+  "Run the generator's offline validation over the committed catalog."
   []
-  (let [f (delay
-            (load-file "scripts/generate_image_models.clj")
-            (ns-resolve 'generate-image-models 'validate-committed!))]
-    (when-not @f
-      (throw (ex-info "scripts/generate_image_models.clj did not define validate-committed!"
-                      {:type :script-invalid})))
-    (@f)))
+  (gen-image-models/validate-committed!))
 
 ;; ─── Catalog loading + offline validation ──────────────────────────────────
 

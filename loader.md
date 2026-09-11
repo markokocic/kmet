@@ -738,7 +738,7 @@ upgrades that must satisfy the same suite.
   in-memory loader over a source map, used by the suite and as the demo
   loader (no sci yet).
 - `test/kmet/libs/test_loader.clj` (ns `kmet.libs.test-loader`) — cases 1–8,
-  10 (case 9 needs a code backend). Register in `kmet.runner/all-namespaces`.
+  10 (case 9 needs a code backend). Register in `kmet.tasks.runner/all-namespaces`.
 - Gate: `bb test-changed`, `bb lint-changed`, `bb format-check-changed`.
 - Constraint: `kmet.libs.test-self-contained` must stay green — no app deps.
 

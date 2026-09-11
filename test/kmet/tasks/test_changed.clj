@@ -1,8 +1,8 @@
-(ns kmet.test-changed
+(ns kmet.tasks.test-changed
   "Tests for the changed-file/require-graph helper behind `bb *-changed`."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [kmet.changed :as changed]))
+            [kmet.tasks.changed :as changed]))
 
 (deftest path->ns-mapping
   (testing "src files map to namespaces (underscores become dashes)"
@@ -40,11 +40,11 @@
   (testing "changing a test namespace includes itself"
     (let [nss (set (changed/affected-test-nss-by '[kmet.tui.components.test-text]))]
       (is (contains? nss 'kmet.tui.components.test-text))))
-  (testing "a -test suffix counts too (kmet.build-test mirrors its src ns)"
-    (let [nss (set (changed/affected-test-nss-by '[kmet.build]))]
-      (is (contains? nss 'kmet.build-test)))
-    (let [nss (set (changed/affected-test-nss-by '[kmet.build-jolt]))]
-      (is (contains? nss 'kmet.build-jolt-test))))
+  (testing "a -test suffix counts too (kmet.tasks.build-test mirrors its src ns)"
+    (let [nss (set (changed/affected-test-nss-by '[kmet.tasks.build]))]
+      (is (contains? nss 'kmet.tasks.build-test)))
+    (let [nss (set (changed/affected-test-nss-by '[kmet.tasks.build-jolt]))]
+      (is (contains? nss 'kmet.tasks.build-jolt-test))))
   (testing "unrelated namespaces stay out"
     (let [nss (set (changed/affected-test-nss-by '[kmet.ai.models]))]
       (is (not (contains? nss 'kmet.tui.components.test-text)))))

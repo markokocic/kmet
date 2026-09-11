@@ -5,14 +5,14 @@
  ;; a non-JVM reader). This (project) config is the BABASHKA view:
  ;; `:cljc {:features [:clj]}` makes clj-kondo read the :clj branches, which is
  ;; what babashka reads; jolt/ is bb-inert, hence excluded. The JOLT view is
- ;; the other half: kmet.lint (test/kmet/lint.clj) projects the files whose
+ ;; the other half: kmet.tasks.lint (test/kmet/tasks/lint.clj) projects the files whose
  ;; reading differs — those carrying :bb (into target/bb-lint/, under this
  ;; config) or :jolt (into target/jolt-lint/, under .clj-kondo-jolt/) — with
  ;; that feature token re-spelled :clj, the only feature clj-kondo matches.
  ;; The hosts' features are disjoint, so the rewrite reproduces each host's
  ;; selection exactly, wherever the branch sits.
  ;; NOTE: target/ must NOT be excluded here — the mirrors live under it and
- ;; kmet.lint passes them by path; it skips target/ itself when it walks a
+ ;; kmet.tasks.lint passes them by path; it skips target/ itself when it walks a
  ;; directory. The overlay replaces this pattern (un-excluding jolt/, whose
  ;; provider-lib mirror is under target/jolt-lint/jolt/).
  :cljc {:features [:clj]}

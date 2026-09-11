@@ -14,31 +14,31 @@
            :task (apply core/-main *command-line-args*)
            :override-builtin true}
   uberjar {:doc "Build target/kmet.jar (run with: bb target/kmet.jar)"
-           :requires ([kmet.build :as build])
+           :requires ([kmet.tasks.build :as build])
            :task (build/uberjar*)
            :override-builtin true}
   dist    {:doc "Package self-contained executable(s) into dist/ — host-dispatched: bb appends the uberjar to the babashka release binary, jolt AOT-compiles a native binary via `jolt build`. bb dist [target ...|--all] [--force] [--no-smoke]: targets linux-aarch64-static, linux-amd64[-static], macos-aarch64, macos-amd64, windows-amd64 (default: current platform), artifact dist/kmet-<ver>-bb<bb-ver>-<slug>. jolt dist [--dev|--opt] [--closed-world] [--dynamic] [--boot fast|small|plain] [--target MACHINE --target-pack DIR] [-o PATH] [--force] [--no-smoke] [--jolt PATH]: default current platform, release mode, artifact dist/kmet-<ver>-jolt<jv>-<os>-<arch>[-dev][.exe]. Both emit a .sh launcher on a termux host (glibc dynamic linker)."
-           :requires ([kmet.build :as build] [kmet.build-jolt :as jbuild])
+           :requires ([kmet.tasks.build :as build] [kmet.tasks.build-jolt :as jbuild])
            :task (if (find-var 'clojure.core/*jolt-version*)
                    (apply jbuild/-main *command-line-args*)
                    (apply build/-main *command-line-args*))}
   test    {:doc "Run fast test suites (excludes ^:slow tests). Args: plain test var names (bb test test-tool-bash), ns/var pairs, or whole namespaces (bb test kmet.tui.test-fuzzy). Whole-namespace args select non-slow vars; var args ignore slow?. Unloadable namespaces are reported with the load failure reason (full run: all; filtered run: requested only)."
-           :requires ([kmet.runner :as runner])
+           :requires ([kmet.tasks.runner :as runner])
            :task (apply runner/-main false *command-line-args*)
            :override-builtin true}
   test-ext {:doc "Run ONLY the slow (^:slow) test suites. Args: plain test var names, ns/var pairs, or whole namespaces (bb test-ext kmet.app.test-extensions). Whole-namespace args select slow vars; var args ignore slow?. Unloadable namespaces are reported with the load failure reason (full run: all; filtered run: requested only)."
-            :requires ([kmet.runner :as runner])
+            :requires ([kmet.tasks.runner :as runner])
             :task (apply runner/-main true *command-line-args*)
             :override-builtin true}
   changed {:doc "List files changed since the last commit (git; mtime-since-baseline fallback without git)"
-           :requires ([kmet.changed :as changed])
+           :requires ([kmet.tasks.changed :as changed])
            :task (doseq [f (changed/changed-files)] (println f))}
   changed-baseline {:doc "Record 'all gates green as of now' for the mtime fallback (no-op with git); run after a full validation"
-                    :requires ([kmet.changed :as changed])
+                    :requires ([kmet.tasks.changed :as changed])
                     :task (do (changed/mark-validated!)
                               (println "Changed-files baseline updated."))}
   test-changed {:doc "Run the non-slow tests of namespaces affected by changed files (require-graph closure). Full gate: bb test"
-                :requires ([kmet.changed :as changed] [kmet.runner :as runner])
+                :requires ([kmet.tasks.changed :as changed] [kmet.tasks.runner :as runner])
                 :task (let [nss (changed/affected-test-nss)
                             ext (changed/extension-changed-files)]
                         (when (seq ext)
@@ -47,7 +47,7 @@
                           (runner/run-ns-syms nss false)
                           (println "No affected test namespaces — nothing to run.")))}
   test-ext-changed {:doc "Run ONLY the slow (^:slow) tests of namespaces affected by changed files. Full gate: bb test-ext"
-                    :requires ([kmet.changed :as changed] [kmet.runner :as runner])
+                    :requires ([kmet.tasks.changed :as changed] [kmet.tasks.runner :as runner])
                     :task (let [nss (changed/affected-test-nss)
                                 ext (changed/extension-changed-files)]
                             (when (seq ext)
@@ -56,16 +56,16 @@
                               (runner/run-ns-syms nss true)
                               (println "No affected test namespaces — nothing to run.")))}
   lint-changed {:doc "Lint changed files plus affected dependents over both reader views (full gate: `lint`, same on both hosts; lints everything when the clj-kondo config changed)"
-                :requires ([kmet.lint :as lint])
+                :requires ([kmet.tasks.lint :as lint])
                 :task (lint/lint-changed!)}
   format-changed {:doc "Format changed files in place (full gate: bb format)"
-                  :requires ([kmet.changed :as changed] [cljfmt.tool :as fmt])
+                  :requires ([kmet.tasks.changed :as changed] [cljfmt.tool :as fmt])
                   :task (let [paths (changed/changed-clj-files)]
                           (if (seq paths)
                             (fmt/fix {:paths paths})
                             (println "No changed files to format.")))}
   format-check-changed {:doc "Check formatting of changed files (full gate: bb format-check)"
-                        :requires ([kmet.changed :as changed] [cljfmt.tool :as fmt])
+                        :requires ([kmet.tasks.changed :as changed] [cljfmt.tool :as fmt])
                         :task (let [paths (changed/changed-clj-files)]
                                 (if (seq paths)
                                   (fmt/check {:paths paths})
@@ -81,24 +81,24 @@
            :task (println "All source namespaces compile successfully.")
            :override-builtin true}
   generate-models {:doc "Regenerate provider model catalogs from models.dev (network)"
-                   :task (do (load-file "scripts/generate_models.clj")
-                             ((ns-resolve 'generate-models '-main)))}
+                   :requires ([kmet.tasks.generate-models :as gen-models])
+                   :task (gen-models/-main)}
   generate-image-models {:doc "Regenerate the image model catalog from OpenRouter (network)"
-                         :task (do (load-file "scripts/generate_image_models.clj")
-                                   ((ns-resolve 'generate-image-models '-main)))}
+                         :requires ([kmet.tasks.generate-image-models :as gen-image-models])
+                         :task (gen-image-models/-main)}
   check-model-data {:doc "Offline validation of committed provider catalogs + manifest"
-                    :task (let [errors (do (load-file "scripts/generate_models.clj")
-                                           ((ns-resolve 'generate-models 'validate-committed!)))]
+                    :requires ([kmet.tasks.generate-models :as gen-models])
+                    :task (let [errors (gen-models/validate-committed!)]
                             (if (seq errors)
                               (do (println "Invalid model data:")
                                   (doseq [e errors] (println "  -" e))
                                   (System/exit 1))
                               (println "Committed model data is valid.")))}
   pack-extension {:doc "Verify an extension artifact root and pack it as .jar (usage: bb pack-extension <src-dir> [out.jar]; src-dir is the artifact root, e.g. extensions/clojure/src)"
-                  :requires ([kmet.build :as build])
+                  :requires ([kmet.tasks.build :as build])
                   :task (apply build/pack-extension! *command-line-args*)}
   lint    {:doc "Lint the tree with clj-kondo over BOTH reader views — babashka (the :clj branches) and jolt (the :jolt branches + jolt/) — so either this or `jolt lint` covers common, bb and jolt code. Optionally: specific files/dirs"
-           :requires ([kmet.lint :as lint])
+           :requires ([kmet.tasks.lint :as lint])
            :task (lint/lint! *command-line-args*)}
   format  {:doc "Format src/test/extensions with cljfmt (fix in place; optionally: specific files/dirs; generated model_data catalogs excluded)"
            :requires ([babashka.fs :as fs] [clojure.string :as str] [cljfmt.tool :as fmt])
@@ -122,6 +122,10 @@
                                          (remove (fn [path] (re-find (re-pattern "/target/|/(image_)?model_data/") (str path))))
                                          (mapv str)))]
                         (fmt/check {:paths paths}))}
+  clean {:doc "Remove the project's build artifacts, caches, logs and test residue (target/, dist/, extensions/*/target/, .cpcache, .jolt, clj-kondo cache, *.log, .kmet-changed-baseline); same task on both hosts. --dry-run|-n lists what would go; source, .kmet/ and .lsp/ are never touched"
+         :requires ([kmet.tasks.clean :as clean])
+         :task (apply clean/-main *command-line-args*)}
   help    {:doc "Show this help"
-           :task (println "kmet - minimal coding agent\n\nTasks:\n  run           Interactive TUI (--help for options)\n  nrepl         Start nREPL server\n  test          Run fast test suites (excludes ^:slow tests; args: var names, ns/var, or whole namespaces)\n  test-ext      Run ONLY slow (^:slow) test suites (args: var names, ns/var, or whole namespaces; pre-commit validation)\n  check         Verify compilation\n  generate-models  Regenerate provider model catalogs from models.dev (network)\n  check-model-data Offline validation of committed provider catalogs + manifest\n  lint          Lint the tree with clj-kondo over BOTH reader views (babashka + jolt; args: files/dirs)\n  format        Format src/test/extensions with cljfmt (fix in place; args: files/dirs)\n  format-check  Check src/test/extensions formatting with cljfmt (no changes; args: files/dirs)\n  dist          Package self-contained executables into dist/ (bb: uberjar + babashka binary; jolt: AOT via `jolt build`)\n\n  Changed-file dev loop (validation of the current changes only):\n  changed       List files changed since the last commit (git; mtime fallback)\n  test-changed      Run tests of namespaces affected by changed files\n  test-ext-changed  Run ONLY the slow (^:slow) tests of affected namespaces\n  lint-changed      Lint changed files plus affected dependents\n  format-changed    Format changed files in place\n  format-check-changed  Check formatting of changed files\n  changed-baseline  Reset the mtime baseline after a manual full validation (no-op with git)\n  Extension files (source + their own tests) are covered by lint/format and\n  the changed tasks; extension tests run from inside their directories.\n  pack-extension  Verify an extension artifact root and pack it as .jar.")
+           :task (println "kmet - minimal coding agent\n\nTasks:\n  run           Interactive TUI (--help for options)\n  nrepl         Start nREPL server\n  test          Run fast test suites (excludes ^:slow tests; args: var names, ns/var, or whole namespaces)\n  test-ext      Run ONLY slow (^:slow) test suites (args: var names, ns/var, or whole namespaces; pre-commit validation)\n  check         Verify compilation\n  generate-models  Regenerate provider model catalogs from models.dev (network)\n  check-model-data Offline validation of committed provider catalogs + manifest\n  lint          Lint the tree with clj-kondo over BOTH reader views (babashka + jolt; args: files/dirs)\n  format        Format src/test/extensions with cljfmt (fix in place; args: files/dirs)\n  format-check  Check src/test/extensions formatting with cljfmt (no changes; args: files/dirs)\n  dist          Package self-contained executables into dist/ (bb: uberjar + babashka binary; jolt: AOT via `jolt build`)
+  clean         Remove build artifacts, caches, logs and temp files (--dry-run lists only)\n\n  Changed-file dev loop (validation of the current changes only):\n  changed       List files changed since the last commit (git; mtime fallback)\n  test-changed      Run tests of namespaces affected by changed files\n  test-ext-changed  Run ONLY the slow (^:slow) tests of affected namespaces\n  lint-changed      Lint changed files plus affected dependents\n  format-changed    Format changed files in place\n  format-check-changed  Check formatting of changed files\n  changed-baseline  Reset the mtime baseline after a manual full validation (no-op with git)\n  Extension files (source + their own tests) are covered by lint/format and\n  the changed tasks; extension tests run from inside their directories.\n  pack-extension  Verify an extension artifact root and pack it as .jar.")
            :override-builtin true}}}

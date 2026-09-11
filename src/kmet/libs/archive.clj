@@ -1,5 +1,5 @@
 (ns kmet.libs.archive
-  "Zip extraction shared by the build packager (kmet.build) and extensions
+  "Zip extraction shared by the build packager (kmet.tasks.build) and extensions
    (e.g. the tree-sitter CLI download).
    Host-evaluated with full Java interop and shared by reference, so
    extension SCI contexts — where instance methods on JDK inner classes
@@ -7,7 +7,7 @@
    support through one audited zip-slip guard instead of reimplementing it.
 
    bb-only: extraction runs on java.util.zip, which the jolt host does not
-   provide, and no jolt runtime code calls it (kmet.build is bb-only;
+   provide, and no jolt runtime code calls it (kmet.tasks.build is bb-only;
    extensions are disabled on jolt) — extract-zip! fails fast with ::bb-only
    under jolt. When extension jars light up on jolt they materialize to
    directories via unzip (jolt's own mvn-jar model) instead of this path."

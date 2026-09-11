@@ -1,11 +1,11 @@
-(ns kmet.test-lint
-  "kmet.lint — the two-view lint engine. The reader-conditional rewrite, the
+(ns kmet.tasks.test-lint
+  "kmet.tasks.lint — the two-view lint engine. The reader-conditional rewrite, the
    projections and the finding merge are pure units; the end-to-end probe
    (^:slow) spawns clj-kondo and covers the whole pipeline: both projections,
    both passes, dedupe."
   (:require [babashka.fs :as fs]
             [clojure.test :refer [deftest is testing]]
-            [kmet.lint :as lint]))
+            [kmet.tasks.lint :as lint]))
 
 (def ^:private views @#'lint/views)
 (def ^:private bb (first views))
@@ -94,8 +94,8 @@
       (finally (fs/delete-tree dir)))))
 
 (deftest test-mirror-paths
-  (is (= (str (fs/file "target/bb-lint" "src" "kmet" "build.cljc"))
-         (@mirror-path bb "src/kmet/build.cljc")))
+  (is (= (str (fs/file "target/bb-lint" "src" "kmet" "tasks" "build.cljc"))
+         (@mirror-path bb "src/kmet/tasks/build.cljc")))
   (is (= (str (fs/file "target/jolt-lint" "jolt" "src" "jolt" "kmet" "providers.clj"))
          (@mirror-path jolt "jolt/src/jolt/kmet/providers.clj")))
   (testing "a mirror copy maps back to its source"

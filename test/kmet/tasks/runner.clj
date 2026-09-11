@@ -1,4 +1,4 @@
-(ns kmet.runner
+(ns kmet.tasks.runner
   "Test runner for both hosts (babashka and jolt).
 
    Slow tests are marked with ^:slow on the deftest (tests that wait real
@@ -8,7 +8,7 @@
    ^:slow tests. Both are selected at the individual test level — no whole
    namespaces are excluded.
 
-   A deftest marked ^:bb-only exercises bb-only behavior (kmet.build's
+   A deftest marked ^:bb-only exercises bb-only behavior (kmet.tasks.build's
    packaging, kmet.libs.archive's zip extraction — babashka.classpath and
    java.util.zip are bb/JVM-only): it runs under `bb test` and is skipped on
    the jolt host. The namespace still loads there (a load gap would report it
@@ -66,8 +66,8 @@
     kmet.app.test-loop
     kmet.test-theme kmet.test-config
     kmet.test-http-boundary
-    kmet.build-test
-    kmet.build-jolt-test
+    kmet.tasks.build-test
+    kmet.tasks.build-jolt-test
     kmet.app.test-skills
 
     kmet.app.test-prompts
@@ -162,8 +162,9 @@
     kmet.app.ui.test-fork-selector
     kmet.app.ui.test-tree-selector
     kmet.test-core
-    kmet.test-changed
-    kmet.test-lint])
+    kmet.tasks.test-changed
+    kmet.tasks.test-clean
+    kmet.tasks.test-lint])
 
 (defn- try-require
   "Require NS-SYM; returns nil on success, the throwable on failure."
@@ -518,7 +519,7 @@
    that matched vars; a filtered run that matched no vars names the filters
    instead and, when a requested namespace failed to load, surfaces its reason.
    When MARK-VALIDATED? and everything passed, records
-   the changed-files baseline (kmet.changed — bb only)."
+   the changed-files baseline (kmet.tasks.changed — bb only)."
   [{:keys [vars unloaded filters]} mark-validated?]
   (let [start-ms (System/currentTimeMillis)
         models-var (try (requiring-resolve 'kmet.ai.models/*use-models-cache*)
@@ -545,7 +546,7 @@
                                     (pos? fails) (conj (str fails " failed"))
                                     (pos? errs) (conj (plural errs "error" "errors")))))
     (when (and (not jolt?) mark-validated? (zero? (+ fails errs)))
-      (try ((requiring-resolve 'kmet.changed/mark-validated!))
+      (try ((requiring-resolve 'kmet.tasks.changed/mark-validated!))
            (catch Throwable e
              (.println System/err
                        (str "warning: could not update changed-files baseline: "
@@ -565,7 +566,7 @@
    filtered run: only the requested ones) with the load failure reason.
    A full run without filters records the changed-files baseline after a
    green result, so `bb test-changed` sees a clean slate.
-   ^:bb-only vars (bb-only behavior — kmet.build / kmet.libs.archive) run
+   ^:bb-only vars (bb-only behavior — kmet.tasks.build / kmet.libs.archive) run
    under bb and are dropped from whole-namespace selection on jolt; var
    filters ignore bb-only too, so an explicit request runs and reports the
    underlying ::bb-only error."

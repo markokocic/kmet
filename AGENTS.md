@@ -4,12 +4,17 @@
 
 ### Build & Run
 - **Entry**: `bb run` — runs `kmet.core/-main`
+- **Clean**: `bb clean` / `jolt clean` — removes build output (`target/`, `dist/`,
+  `extensions/*/target/`), caches (`.cpcache`, `.jolt`, the clj-kondo cache),
+  logs and dev residue; `--dry-run` lists without deleting. Backed by
+  `kmet.tasks.clean` (`test/kmet/tasks/clean.clj`); tracked files, `.kmet/` and
+  `.lsp/` are never touched.
 - **nREPL**: `bb nrepl` — starts nREPL server on port 1667 for interactive development (blocks). Connect your editor/tool to `localhost:1667`.
   To stop: evaluate `(System/exit 0)` via nREPL (or `fuser -k 1667/tcp` from another terminal).
 - **Lint**: `bb lint` / `jolt lint` — clj-kondo over BOTH reader views, in one report:
   the babashka view (the tree, with files carrying a `:bb` branch projected) and the jolt
   view (the files carrying `:jolt`, plus `jolt/`). clj-kondo knows only the standard
-  `:clj`/`:cljs` features, so `kmet.lint` (`test/kmet/lint.clj`) re-spells the view's own
+  `:clj`/`:cljs` features, so `kmet.tasks.lint` (`test/kmet/tasks/lint.clj`) re-spells the view's own
   feature to `:clj` in a projection under `target/` (`target/bb-lint/`, `target/jolt-lint/`
   — stable paths, so clj-kondo's cache carries over) and layers
   `.clj-kondo-jolt/config.edn` on top of the project config for the jolt runtime seams
@@ -24,14 +29,14 @@
   The generated EDN provider catalogs (`src/kmet/ai/model_data/`,
   `src/kmet/ai/image_model_data/`) are excluded: their exact bytes are
   sha256-manifested (`manifest.edn`, checked by `bb check-model-data`) and are
-  owned solely by the generator (scripts/generate_models.clj, delegating to
+  owned solely by the generator (kmet.tasks.generate-models, delegating to
   `kmet.ai.model-gen`; `kmet --generate-models` runs the same pipeline into
   the user-level cache ~/.kmet/agent/models-cache/, preferred over the
   bundled catalogs when strictly newer).
   `cljfmt.edn` carries `:extra-indents` for the custom macros; default arg alignment is
   align-to-first-argument (modern cljfmt). Run `bb format` after structural edits (e.g. let merges).
 - **Changed-file dev loop** (fast validation of only the current changes): the `bb *-changed`
-  tasks are backed by `kmet.changed` (`test/kmet/changed.clj`) — a require-graph scan over
+  tasks are backed by `kmet.tasks.changed` (`test/kmet/tasks/changed.clj`) — a require-graph scan over
   src/test with reverse-transitive closure, so a source change also re-runs the tests that
   transitively require it. `bb changed` lists files changed since the last commit
   (git diff vs HEAD + untracked; mtime-since-baseline fallback when the project has no git).
@@ -44,7 +49,7 @@
   cover just the changed files. Full gates stay `bb test`/`bb test-ext`/`bb lint`/`bb format-check`.
   Caveats: "changed" is since-last-commit, so a full gate without committing re-runs those
   files next time (over-inclusive, never under); green full `bb test`/`bb test-ext` runs
-  (no filters) update the mtime baseline via `kmet.runner` → `kmet.changed/mark-validated!`,
+  (no filters) update the mtime baseline via `kmet.tasks.runner` → `kmet.tasks.changed/mark-validated!`,
   which is a no-op with git.
   `extensions/` is covered too: its .clj files (source **and any tests they carry**) are part
   of `bb lint`/`bb format`/`bb format-check` and the changed-file scan. Extension tests are
@@ -58,19 +63,19 @@
   babashka `deps.edn`: `org.jline/jline-terminal`, `org.jline/jline-reader`) as the
   bb/JVM terminal backend — the Jolt terminal backend uses no dependency: termios /
   kernel32 through `jolt.ffi`.
-- **Packaging** — the `dist` task is host-dispatched: `bb dist` runs `kmet.build`,
-  `jolt dist` runs `kmet.build-jolt` (one task name on both hosts; a task may not be called
+- **Packaging** — the `dist` task is host-dispatched: `bb dist` runs `kmet.tasks.build`,
+  `jolt dist` runs `kmet.tasks.build-jolt` (one task name on both hosts; a task may not be called
   `build` — jolt's built-in `build` owns that name, and a task either loses to it with a
   warning on every run or, with `:override-builtin`, makes a wrapper's own `jolt build` call
   re-enter itself forever).
-  - babashka (`kmet.build`): `bb uberjar` → `target/kmet.jar` (src + resolved dep jars,
+  - babashka (`kmet.tasks.build`): `bb uberjar` → `target/kmet.jar` (src + resolved dep jars,
     only `borkdude/deps.clj` isn't bb-builtin); `bb dist [targets|--all] [--force] [--no-smoke]`
     → self-contained executables in `dist/` (official bb release binary + appended uberjar,
     fresh uberjar always rebuilt first; artifacts `kmet-<ver>-bb<bb-ver>-<slug>`, version =
     git tag else `<YYYYMMDD>-<short-hash>` else "dev"). Termux: a `.sh` launcher next to the
     binary (glibc linker exec + `--jar <self>`; auto-detection breaks because `/proc/self/exe`
     resolves to `ld-linux`). Downloads cached + sha256-checked in `target/build-cache/`.
-  - jolt (`kmet.build-jolt`): AOT-compiles via a `jolt build -m kmet.core` subprocess (no jar
+  - jolt (`kmet.tasks.build-jolt`): AOT-compiles via a `jolt build -m kmet.core` subprocess (no jar
     step, nothing to download) into `target/jolt/<slug>/<mode>/` — jolt's incremental build
     and its `.build/` payload dir stay out of `dist/` — then copies to
     `dist/kmet-<ver>-jolt<jv>-<os>-<arch>[-dev][.exe]` and smoke-tests it with `--list-models`
@@ -158,6 +163,14 @@ src/kmet/
 ├── app/      — App-level business logic (pi: dist/core/)
 │   ├── tools/  — Tool implementations (one file per tool)
 │   └── ui/     — App-specific TUI components (Pi's coding-agent layer)
+├── tasks/    — bb-task implementations (bb.edn `:requires`/entry points):
+│              build.cljc (bb uberjar / bb dist / pack-extension),
+│              build_jolt.clj (the `jolt dist` branch), generate_models.clj +
+│              generate_image_models.clj (the bb generate-models /
+│              generate-image-models / check-model-data entries over
+│              kmet.ai.model-gen). Task-only code — nothing in the shipped app
+│              requires it, and uberjar* keeps all of kmet/tasks/ out of the
+│              jar; the dev-loop tasks live in test/ (see below)
 └── tui/      — Generic TUI library (Pi's @earendil-works/pi-tui)
     │           Usage docs: src/kmet/tui/tui.md — MUST be kept up to date
     │           with any behavior change they describe
@@ -171,6 +184,13 @@ extensions/ — Shipped opt-in extensions (single .clj files or manifest dirs;
               pi: examples/extensions). Extension authoring guide (the full
               kmet.extension contract): extensions/extensions.md — MUST be
               kept up to date with any behavior it describes
+
+test/kmet/tasks/ — the dev-loop task implementations (they run under the test
+              classpath, not in the app): changed.clj (bb changed + the
+              *-changed tasks), runner.clj (bb test / bb test-ext), clean.clj
+              (bb clean), lint.clj (bb lint / bb lint-changed, over both reader
+              views), plus the build task tests. Their test namespaces are
+              siblings in the same dir (test_changed.clj, test_clean.clj, ...)
 
 jolt/      — kmet's RFC 0014 provider lib (Jolt-only; see the contract below).
               Own deps.edn + src/jolt/kmet/providers.clj, pulled in from the
@@ -228,6 +248,11 @@ install namespace loads on the first reference, whatever loaded first.
 - **`kmet.app.*`** (non-ui) — business logic. Never imports `kmet.tui.*` or `kmet.app.ui.*`.
   May depend on `kmet.libs.*` and `kmet.ai.*`.
 - **`kmet.core`** — entry only: args + dispatch. Never contains app logic.
+- **`kmet.tasks.*`** — bb-task implementations, never required by shipped code:
+  `src/kmet/tasks/` holds the bb-only packagers (kept out of the uberjar by
+  `uberjar*`), `test/kmet/tasks/` the dev-loop tasks that need the test
+  classpath (`changed`, `runner`, `clean`, `lint`). They may depend on anything
+  they orchestrate; nothing in `src/kmet` outside `tasks/` may require them.
 
 ### ANSI escape codes
 - **Never use raw ANSI escape codes (`\u001b[...`) outside `src/kmet/tui/` and
@@ -247,8 +272,8 @@ install namespace loads on the first reference, whatever loaded first.
   real wall-clock time: sleeps, terminal-query timeouts; real network
   calls; and subprocess spawns — bash tool, shell commands, git). Mark
   slow tests with `^:slow` on the deftest; selection happens per test var
-  in `kmet.runner`.
-- New test namespaces must be registered in `kmet.runner/all-namespaces` (the full run loads
+  in `kmet.tasks.runner`.
+- New test namespaces must be registered in `kmet.tasks.runner/all-namespaces` (the full run loads
   exactly that list).
 - During development, validate only what changed with `bb test-changed` / `bb lint-changed` /
   `bb format-check-changed` (see Build & Run), or run individual test namespaces with filters.
@@ -283,12 +308,12 @@ for a full gate. The default validation loop is the changed-file tasks above.
   Unix, `babashka.fs/canonicalize` resolves only `/`-separated `..` — `\` is a
   plain filename char, so `..\evil` is written as a literal filename and
   passes `starts-with?` containment checks. Normalize entry names (`\` → `/`)
-  before containment checks (see `kmet.build/extract-archive!`).
+  before containment checks (see `kmet.tasks.build/extract-archive!`).
 - **`fs/relativize` is not normalized the same way on both hosts**: bb's
   (java.nio `Path.relativize`) collapses a `./` segment, jolt's keeps it
   (`(fs/relativize cwd "/abs/./a/b.cljc")` → `a/b.cljc` vs `./a/b.cljc`), so
   any result that is compared or used as a path segment needs an explicit
-  `fs/normalize` (see `kmet.lint/repo-relative`).
+  `fs/normalize` (see `kmet.tasks.lint/repo-relative`).
 - **clj-kondo `--config` on the CLI works** (e.g. `--config
   '{:linters {:namespace-name-mismatch {:level :off}}}'`), but there is no
   blanket `:all` linter key, and the finding type for "X already refers to

@@ -4,7 +4,7 @@
    timeouts come back as {:error ...} maps so callers (hooks!) can treat
    them as pass-through. ensure-binary! downloads the pinned release once,
    verifies its sha256 against the shipped manifest, emits the Termux glibc
-   launcher next to the binary (same pattern as kmet.build) and smoke-runs
+   launcher next to the binary (same pattern as kmet.tasks.build) and smoke-runs
    --version before declaring the install good."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]

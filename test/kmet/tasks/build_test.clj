@@ -1,13 +1,13 @@
-(ns kmet.build-test
-  ;; Every test here exercises the bb-only packaging pipeline (kmet.build:
+(ns kmet.tasks.build-test
+  ;; Every test here exercises the bb-only packaging pipeline (kmet.tasks.build:
   ;; uberjar/pack-extension over babashka.classpath + java.util.zip — the bb
-  ;; branch of the `dist` task). All vars carry ^:bb-only — kmet.runner runs
+  ;; branch of the `dist` task). All vars carry ^:bb-only — kmet.tasks.runner runs
   ;; them under bb and skips them on the jolt host, whose packager is
-  ;; kmet.build-jolt (see kmet.build-jolt-test).
+  ;; kmet.tasks.build-jolt (see kmet.tasks.build-jolt-test).
   (:require [babashka.fs :as fs]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]
-            [kmet.build :as build]))
+            [kmet.tasks.build :as build]))
 
 (deftest ^:bb-only slug-for-maps-os-arch-to-release-assets
   (is (= "linux-aarch64-static" (build/slug-for "linux" "aarch64")))

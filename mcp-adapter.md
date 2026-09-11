@@ -678,7 +678,7 @@ them in that order.
    with `/.well-known/oauth-authorization-server`, registration, token,
    authorize (loopback) and device endpoints — DCR → PKCE loopback → token →
    authenticated request → 401-refresh → device flow → logout. The lib's
-   unit tests are registered in `kmet.runner/all-namespaces` (inside the
+   unit tests are registered in `kmet.tasks.runner/all-namespaces` (inside the
    normal gates, unlike extension files); the existing `kmet.ai` OAuth tests
    must stay green unchanged, proving the extraction is behavior-neutral.
 6. **Panel tests** (`scripts/validate-panel.bb`): McpPanel render (borders,
@@ -794,7 +794,7 @@ landed and every deliberate deviation from the text above.
    token incl. device pending/slow_down, device start), and
    `validate-client.bb` / `validate-config.bb` / `validate-oauth.bb`
    (27 + 24 + 18 checks, all green). The lib's unit tests are registered
-   in `kmet.runner/all-namespaces` (`kmet.libs.test-oauth`, HTTP mocked
+   in `kmet.tasks.runner/all-namespaces` (`kmet.libs.test-oauth`, HTTP mocked
    via with-redefs — no network).
 10. **Extension load** was verified against `kmet.extension/create-
     nullable-api` (proxy tool, `/mcp` command + completions, events,
@@ -867,7 +867,7 @@ landed and every deliberate deviation from the text above.
     (base64url, DER reader/writer, PEM PKCS#8/PKCS#1 + JWK RSA/EC key
     parsing, `sign-jwt` RS256/ES256) — `kmet.libs.oauth` keeps only the
     flow + token-endpoint logic and calls `crypto/sign-jwt` for the
-    jwt-bearer assertion. Registered in `kmet.runner/all-namespaces` as
+    jwt-bearer assertion. Registered in `kmet.tasks.runner/all-namespaces` as
     `kmet.libs.test-crypto`.
 18. **bb crypto constraints** (why the DER code exists): babashka's fixed
     class registry lacks `RSAPrivateCrtKeySpec` / `ECPrivateKeySpec` /

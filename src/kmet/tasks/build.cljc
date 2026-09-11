@@ -1,6 +1,6 @@
-(ns kmet.build
+(ns kmet.tasks.build
   "Build self-contained kmet executables (the babashka host's half of the
-   `dist` task — `jolt dist` runs kmet.build-jolt instead).
+   `dist` task — `jolt dist` runs kmet.tasks.build-jolt instead).
    A binary is the official babashka release binary with target/kmet.jar (an
    uberjar of src + runtime deps) appended — babashka detects the appended zip
    at startup and runs the uberjar's -main (babashka wiki: Self-contained
@@ -16,7 +16,7 @@
    bb-only: packaging runs on babashka.classpath and java.util.zip, which the
    jolt host does not provide — the entry points (uberjar*, -main,
    pack-extension!) fail fast with ::bb-only under jolt, where the packager is
-   kmet.build-jolt (jolt AOT-compiles instead of appending an uberjar), see
+   kmet.tasks.build-jolt (jolt AOT-compiles instead of appending an uberjar), see
    jolt-port.md M5/M6."
   (:require #?@(:bb [[babashka.classpath :as bcp]])
             [babashka.fs :as fs]
@@ -37,7 +37,7 @@
 (def ^:private main-class "kmet.core")
 
 (defn- bb-only!
-  "Throw ::bb-only when invoked under the jolt host. kmet.build is the
+  "Throw ::bb-only when invoked under the jolt host. kmet.tasks.build is the
    babashka packaging pipeline (babashka.classpath classpath, java.util.zip
    uberjar); jolt has neither, and `jolt build` packages a self-contained
    image instead — callers on jolt get a fast, explicit failure rather than
@@ -231,7 +231,7 @@
    bb-builtin; keeping all jars is simpler than filtering). Dependency
    manifests and signatures are skipped so ours wins. Returns absolute path."
   []
-  (bb-only! "kmet.build/uberjar*")
+  (bb-only! "kmet.tasks.build/uberjar*")
   (fs/create-dirs (fs/parent jar-path))
   (let [tmp (str jar-path ".part")
         seen (volatile! #{})
@@ -249,15 +249,16 @@
                                "Main-Class: " main-class "\r\n\r\n")) zos)
       (.closeEntry zos)
       (doseq [p (sort-by str (fs/glob "src" "**.{clj,cljc,edn}"))]
-        ;; the packagers themselves aren't runtime code — keep them out of
-        ;; artifacts (kmet/build.clj is this pipeline, kmet/build_jolt.clj the
-        ;; jolt one; nothing else under src/kmet/ is named build*)
+        ;; src/kmet/tasks/ is task-only code — the packagers (this pipeline,
+        ;; build_jolt.clj) and the generator entries (generate_models.clj,
+        ;; generate_image_models.clj). Nothing in the app requires it, so it
+        ;; stays out of artifacts.
         (let [rel (str (fs/relativize "src" p))
               ;; jar entries must use / separators — fs/relativize yields \ on
               ;; Windows, which breaks bb's classpath lookup (kmet/core.clj
               ;; would not resolve from the appended jar)
               entry (str/replace rel "\\" "/")]
-          (when-not (str/starts-with? entry "kmet/build")
+          (when-not (str/starts-with? entry "kmet/tasks/")
             (.putNextEntry zos (java.util.zip.ZipEntry. entry))
             (with-open [in (io/input-stream (fs/file p))]
               (io/copy in zos))
@@ -403,7 +404,7 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" --jar \"$BIN\" \"$@\"
    (default <name>.jar in the cwd). Deterministic sorted order, / entry
    separators, no META-INF. Returns the output path string."
   [src-dir & [out-path]]
-  (bb-only! "kmet.build/pack-extension!")
+  (bb-only! "kmet.tasks.build/pack-extension!")
   (let [{:keys [name]} (pack-verify! src-dir)
         root (fs/canonicalize src-dir)
         out (str (or out-path (str name ".jar")))]
@@ -445,7 +446,7 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" --jar \"$BIN\" \"$@\"
 
 (defn -main
   "bb dist [target ...|--all] [--force] [--no-smoke]   (the bb.edn task's
-   babashka branch; the jolt branch runs kmet.build-jolt/-main)
+   babashka branch; the jolt branch runs kmet.tasks.build-jolt/-main)
 
    Build self-contained kmet executable(s) in dist/: the official babashka
    release binary with the kmet uberjar appended. Targets are release asset
@@ -456,7 +457,7 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" --jar \"$BIN\" \"$@\"
    memory on constrained devices). A fresh uberjar (target/kmet.jar) is
    always rebuilt first so artifacts never bundle stale sources."
   [& args]
-  (bb-only! "kmet.build/-main (the bb half of the dist task)")
+  (bb-only! "kmet.tasks.build/-main (the bb half of the dist task)")
   (let [{:keys [targets all? force? no-smoke? help?]} (parse-args args)]
     (when help?
       (println (:doc (meta #'-main)))

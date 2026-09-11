@@ -2,9 +2,9 @@
   "Phase 1: offline strict validation of the committed provider catalogs +
    manifest hash match (pi check-model-data.ts / validateModelDataDirectory).
 
-   The generator (kmet.ai.model-gen, entered via scripts/generate_models.clj)
+   The generator (kmet.ai.model-gen, entered via kmet.tasks.generate-models)
    is the single source of truth for the strict per-model validation; this
-   test loads it and runs its offline half over the committed files, so
+   test runs its offline half over the committed files, so
    drift (uncommitted regenerations, hand-edits) is caught in CI without
    network."
   (:require [babashka.fs :as fs]
@@ -12,20 +12,14 @@
             [clojure.string :as str]
             [clojure.test :as t]
             [kmet.ai.model-gen :as mg]
-            [kmet.libs.http :as http]))
+            [kmet.libs.http :as http]
+            [kmet.tasks.generate-models :as gen-models]))
 
 (defn- validate-dir
-  "Run the generator script's offline validation over DIR (defaults to the
-   committed catalog dir). The script is loaded once and cached — its
-   validate-committed! is a pure read of the catalog files."
+  "Run the generator's offline validation over DIR (defaults to the committed
+   catalog dir) — validate-committed! is a pure read of the catalog files."
   [& [dir]]
-  (let [f (force
-           (delay
-             (load-file "scripts/generate_models.clj")
-             (ns-resolve 'generate-models 'validate-committed!)))]
-    (when-not f
-      (throw (ex-info "scripts/generate_models.clj did not define validate-committed!"
-                      {:type :script-invalid})))
+  (let [f gen-models/validate-committed!]
     (if dir (f dir) (f))))
 
 (t/deftest test-committed-catalogs-valid

@@ -1,10 +1,10 @@
-(ns kmet.build-jolt-test
-  ;; The jolt packager's pure surface (kmet.build-jolt, the jolt branch of the
+(ns kmet.tasks.build-jolt-test
+  ;; The jolt packager's pure surface (kmet.tasks.build-jolt, the jolt branch of the
   ;; `dist` task): slug/naming rules and the CLI parser. The compile itself is
   ;; jolt's CLI in a subprocess and is not unit-tested here; only the host's
   ;; own artifact can smoke-test, which the packager does as part of the build.
   (:require [clojure.test :refer [deftest is testing]]
-            [kmet.build-jolt :as jbuild]))
+            [kmet.tasks.build-jolt :as jbuild]))
 
 (deftest slug-for-names-os-and-arch
   (is (= "linux-amd64" (jbuild/slug-for "Linux" "amd64")))

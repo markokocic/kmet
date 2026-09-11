@@ -1,4 +1,4 @@
-(ns kmet.lint
+(ns kmet.tasks.lint
   "The `lint` / `lint-changed` tasks: clj-kondo over BOTH reader views.
 
    kmet's .cljc files branch between its two hosts on the :bb and :jolt reader
@@ -37,7 +37,7 @@
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.string :as str]
-            [kmet.changed :as changed]
+            [kmet.tasks.changed :as changed]
             [kmet.libs.json :as json]))
 
 ;; ─── reader views ─────────────────────────────────────────────────────────
@@ -258,7 +258,7 @@
 (defn- mirror-path
   [view path]
   (when-not (in-project? path)
-    (throw (ex-info (str "kmet.lint: cannot project " path " — outside the project")
+    (throw (ex-info (str "kmet.tasks.lint: cannot project " path " — outside the project")
                     {:path path})))
   (str (fs/file (:dir view) (repo-relative path))))
 
