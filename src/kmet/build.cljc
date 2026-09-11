@@ -16,7 +16,7 @@
    jolt host does not provide — the entry points (uberjar*, -main,
    pack-extension!) fail fast with ::bb-only under jolt, and the jolt build
    packager is separate (jolt-port.md M5/M6)."
-  (:require #?@(:jolt nil :clj [[babashka.classpath :as bcp]])
+  (:require #?@(:bb [[babashka.classpath :as bcp]])
             [babashka.fs :as fs]
             [babashka.process :as p]
             [kmet.libs.json :as json]

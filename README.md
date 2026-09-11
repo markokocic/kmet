@@ -341,7 +341,8 @@ Create EDN theme files in `~/.kmet/agent/themes/`. See `examples/themes/` for fo
 bb run             # Interactive TUI
 bb test            # Run fast test suites (excludes ^:slow tests)
 bb test-ext        # Run only the slow (^:slow) test suites
-bb lint            # clj-kondo over src/test
+bb lint            # clj-kondo over both reader views (babashka + jolt);
+                   # `jolt lint` runs the same gate
 bb format          # cljfmt (fix) / bb format-check (verify)
 bb generate-models     # Regenerate provider catalogs (network)
 kmet --generate-models # Refresh the user-level catalog cache (network)

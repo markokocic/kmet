@@ -25,14 +25,14 @@
    Extensions load at startup (core.clj), are re-loaded by /reload, and can
    be unloaded/reloaded at runtime via unload-extension! /
    reload-extensions!."
-  (:require #?@(:jolt nil :clj [[babashka.classes]])
+  (:require #?@(:bb [[babashka.classes]])
             [clojure.java.io :as io]
             [clojure.edn :as edn]
             [clojure.string :as str]
             [babashka.fs :as fs]
             [babashka.process :as proc]
-            #?@(:jolt nil :clj [[borkdude.deps :as bdeps]])
-            #?@(:jolt nil :clj [[sci.core :as sci]])
+            #?@(:bb [[borkdude.deps :as bdeps]])
+            #?@(:bb [[sci.core :as sci]])
             [kmet.ai.models :as models]
             [kmet.ai.hooks :as ai-hooks]
             [kmet.app.commands :as commands]
@@ -832,15 +832,15 @@
 (def ^:private runtime-classes
   "Classes that must be registered by their RUNTIME identity: sci resolves
    instance-method calls against the exact class of the object, and JDK\n   factory methods return internal wrappers (e.g. MessageDigest/getInstance\n   returns a $Delegate$CloneableDelegate) whose names are not loadable via\n   Class/forName under babashka's interceptor. Captured as live Class\n   objects instead — extend when another bundled library needs more."
-  #?(:jolt []
-     :clj [(class (java.security.MessageDigest/getInstance "SHA-256"))
-           (.getSuperclass (class (java.security.MessageDigest/getInstance "SHA-256")))]))
+  #?(:bb [(class (java.security.MessageDigest/getInstance "SHA-256"))
+          (.getSuperclass (class (java.security.MessageDigest/getInstance "SHA-256")))]
+     :jolt []))
 
 (defonce ^:private context-classes
-  (let [from-bb #?(:jolt {}
-                   :clj (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
-                                      (remove #(str/starts-with? (.getName ^Class %) "[")
-                                              (babashka.classes/all-classes)))))
+  (let [from-bb #?(:bb (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
+                                     (remove #(str/starts-with? (.getName ^Class %) "[")
+                                             (babashka.classes/all-classes))))
+                   :jolt {})
         runtime (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
                               runtime-classes))]
     (merge from-bb runtime)))
@@ -1234,50 +1234,51 @@
                    (ns-name ns-obj))))
              (all-ns))))
 
-(def ^:private bundled-artifacts
-  "Artifacts babashka ships (clojure + spec are always bundled) — excluded
+#?(:jolt
+   (defn- closure-jars
+     "Stub on Jolt — extension loading is disabled."
+     [_deps-map] [])
+   :bb
+   (do
+     (def ^:private bundled-artifacts
+       "Artifacts babashka ships (clojure + spec are always bundled) — excluded
    from extension closures, matching bb's add-deps classpath-overrides."
-  #{"org.clojure/clojure"
-    "org.clojure/spec.alpha"
-    "org.clojure/core.specs.alpha"})
+       #{"org.clojure/clojure"
+         "org.clojure/spec.alpha"
+         "org.clojure/core.specs.alpha"})
 
-(defn- bundled-artifact?
-  "True when ENTRY is a jar of one of the artifacts babashka ships (clojure
+     (defn- bundled-artifact?
+       "True when ENTRY is a jar of one of the artifacts babashka ships (clojure
    + spec are always bundled), which must not be served to extension
    contexts — the SCI-incompatible Maven copies would be evaluated instead
    of bb's bundled ports. Matches the m2 layout: only the group is
    slash-munged, the artifact name keeps its dots (org.clojure/spec.alpha
    lives at repository/org/clojure/spec.alpha/)."
-  [entry]
-  (some (fn [ga]
-          (let [[g a] (str/split ga #"/" 2)]
-            (str/includes? entry (str "repository/" (str/replace g "." "/") "/" a "/"))))
-        bundled-artifacts))
+       [entry]
+       (some (fn [ga]
+               (let [[g a] (str/split ga #"/" 2)]
+                 (str/includes? entry (str "repository/" (str/replace g "." "/") "/" a "/"))))
+             bundled-artifacts))
 
-#?(:jolt
-   (defn- closure-jars
-     "Stub on Jolt — extension loading is disabled."
-     [_deps-map] [])
-   :clj
-   (defn- closure-jars
-     "The complete transitive jar set for DEPS-MAP, computed in-process via
+     (defn- closure-jars
+       "The complete transitive jar set for DEPS-MAP, computed in-process via
         borkdude.deps (the tools.deps port) — no subprocess, no global classpath
         changes, nothing written outside ~/.m2. Resolution failures throw
         (borkdude.deps' default *exit-fn* would kill the process)."
-     [deps-map]
-     (let [cp (with-out-str
-                (binding [*print-namespace-maps* false
-                          bdeps/*exit-fn* (fn [{:keys [message]}]
-                                            (throw (ex-info (or message "deps resolution failed")
-                                                            {:deps deps-map})))]
-                  (bdeps/-main "-Srepro" "-Spath"
-                               "-Sdeps" (pr-str {:deps deps-map
-                                                 :mvn/repos {"clojars" {:url "https://repo.clojars.org/"}}})
-                               "-Sdeps-file" "__kmet_no_deps__.edn")))]
-       (->> (str/split (str/trim cp) (re-pattern (System/getProperty "path.separator")))
-            (filter #(or (str/includes? % ".m2") (str/includes? % ".gitlibs")))
-            (remove bundled-artifact?)
-            vec))))
+       [deps-map]
+       (let [cp (with-out-str
+                  (binding [*print-namespace-maps* false
+                            bdeps/*exit-fn* (fn [{:keys [message]}]
+                                              (throw (ex-info (or message "deps resolution failed")
+                                                              {:deps deps-map})))]
+                    (bdeps/-main "-Srepro" "-Spath"
+                                 "-Sdeps" (pr-str {:deps deps-map
+                                                   :mvn/repos {"clojars" {:url "https://repo.clojars.org/"}}})
+                                 "-Sdeps-file" "__kmet_no_deps__.edn")))]
+         (->> (str/split (str/trim cp) (re-pattern (System/getProperty "path.separator")))
+              (filter #(or (str/includes? % ".m2") (str/includes? % ".gitlibs")))
+              (remove bundled-artifact?)
+              vec)))))
 
 (defonce ^:private jars-cache (atom {}))
 

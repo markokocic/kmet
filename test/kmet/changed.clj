@@ -84,9 +84,10 @@
     (spit baseline-file (str (System/currentTimeMillis)))))
 
 (defn config-changed?
-  "True when clj-kondo config or hook files changed — those force a full lint."
+  "True when clj-kondo config or hook files changed (either the project config
+   or the jolt view's .clj-kondo-jolt overlay) — those force a full lint."
   []
-  (boolean (some #(str/starts-with? % ".clj-kondo/") (changed-files))))
+  (boolean (some #(str/starts-with? % ".clj-kondo") (changed-files))))
 
 (defn path->ns
   "Source/test file path to its namespace symbol
@@ -205,14 +206,6 @@
     (->> (concat (changed-clj-files) (map paths closure-nss))
          distinct
          sort)))
-
-(defn all-clj-files
-  "Every src/test/extensions .clj file (full lint when clj-kondo config
-   changed)."
-  []
-  (->> (mapcat dir-clj-files ["src" "test" "extensions"])
-       (map str)
-       sort))
 
 (defn extension-changed-files
   "Changed .clj files under extensions/. Their tests run from inside the

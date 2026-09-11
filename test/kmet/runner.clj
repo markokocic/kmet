@@ -161,7 +161,8 @@
     kmet.app.ui.test-fork-selector
     kmet.app.ui.test-tree-selector
     kmet.test-core
-    kmet.test-changed])
+    kmet.test-changed
+    kmet.test-lint])
 
 (defn- try-require
   "Require NS-SYM; returns nil on success, the throwable on failure."

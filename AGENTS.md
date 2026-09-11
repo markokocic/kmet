@@ -6,9 +6,20 @@
 - **Entry**: `bb run` — runs `kmet.core/-main`
 - **nREPL**: `bb nrepl` — starts nREPL server on port 1667 for interactive development (blocks). Connect your editor/tool to `localhost:1667`.
   To stop: evaluate `(System/exit 0)` via nREPL (or `fuser -k 1667/tcp` from another terminal).
-- **Lint**: `bb lint` — clj-kondo over `src`/`test`. Custom macros (`defcomponent`/`with-let`)
+- **Lint**: `bb lint` / `jolt lint` — clj-kondo over BOTH reader views, in one report:
+  the babashka view (the tree, with files carrying a `:bb` branch projected) and the jolt
+  view (the files carrying `:jolt`, plus `jolt/`). clj-kondo knows only the standard
+  `:clj`/`:cljs` features, so `kmet.lint` (`test/kmet/lint.clj`) re-spells the view's own
+  feature to `:clj` in a projection under `target/` (`target/bb-lint/`, `target/jolt-lint/`
+  — stable paths, so clj-kondo's cache carries over) and layers
+  `.clj-kondo-jolt/config.edn` on top of the project config for the jolt runtime seams
+  (jolt.ffi/jolt.host, `__register-*`). The rewrite keeps branch order, and a reader takes
+  the first matching branch in file order — so a `#?(:jolt X :clj Y)` (a leftover `:clj`
+  branch) still selects what jolt selects. Both hosts run both views, so EITHER gate alone
+  covers common, babashka and jolt code; findings the views
+  share are reported once. The gate requires 0 errors, warnings, and info findings.
+  Custom macros (`defcomponent`/`with-let`)
   are handled via analysis hooks in `.clj-kondo/hooks/`; keep them in sync when the macro shapes change.
-  The gate requires `bb lint` to pass with 0 errors, warnings, and info findings.
 - **Format**: `bb format` (fix) / `bb format-check` (verify) — cljfmt over `src`/`test`.
   The generated EDN provider catalogs (`src/kmet/ai/model_data/`,
   `src/kmet/ai/image_model_data/`) are excluded: their exact bytes are
@@ -27,8 +38,9 @@
   `bb test-changed` runs the non-slow tests of affected namespaces and
   `bb test-ext-changed` the slow (^:slow) ones (full gates: `bb test` / `bb test-ext`);
   `bb lint-changed` lints changed files plus affected
-  dependents (a changed signature is only flagged at the call site), falling back to a full
-  lint when `.clj-kondo/` config/hooks changed; `bb format-check-changed` / `bb format-changed`
+  dependents (a changed signature is only flagged at the call site, and changed `jolt/`
+  files join in) over both reader views — same on either host: `jolt lint-changed`. It
+  falls back to a full lint when `.clj-kondo*` config/hooks changed; `bb format-check-changed` / `bb format-changed`
   cover just the changed files. Full gates stay `bb test`/`bb test-ext`/`bb lint`/`bb format-check`.
   Caveats: "changed" is since-last-commit, so a full gate without committing re-runs those
   files next time (over-inclusive, never under); green full `bb test`/`bb test-ext` runs
@@ -81,6 +93,16 @@
 - **Dispatch**: explicit tables/maps over multimethods — extensions register
   at runtime through calls, so compile-time `defmethod` registries would
   fork the mechanism (see the tool renderer registry)
+- **Reader conditionals name the host**: `:bb` selects on babashka, `:jolt`
+  on jolt; plain code is what both run. The two features are disjoint —
+  babashka skips `:jolt`, jolt skips `:bb` — so no branch order can make one
+  host run the other's code. **`:clj` is not used in kmet source**: it matches
+  BOTH hosts (and a plain JVM), and a reader takes the first matching branch in
+  file order, so `#?(:clj A :jolt B)` gives *both* hosts A (on jolt `:clj` comes
+  first) — a `:clj` branch meant for babashka silently runs on jolt. When a
+  host-specific carve-out needs a value for the other host, write
+  `#?(:jolt X :default Y)`: `:default` is what every reader falls back to.
+  Both lint gates check every view (see Lint).
 - **Private vars**: use `defn-` / `def-` for implementation details not part of public API
 
 ### Git
@@ -139,7 +161,8 @@ extensions/ — Shipped opt-in extensions (single .clj files or manifest dirs;
 jolt/      — kmet's RFC 0014 provider lib (Jolt-only; see the contract below).
               Own deps.edn + src/jolt/kmet/providers.clj, pulled in from the
               root deps.edn as {:local/root "jolt"}. Inert on bb/JVM: no bb
-              classpath namespace requires jolt.*, and clj-kondo excludes it.
+              classpath namespace requires jolt.* and the babashka view excludes
+              it; the jolt view lints it (see Lint above).
 
 Root-level files: core.clj (CLI entry, arg parsing, mode dispatch), config.clj
 (configuration loading), debug.clj (debug/error logging), extension.clj (the
@@ -250,6 +273,11 @@ for a full gate. The default validation loop is the changed-file tasks above.
   plain filename char, so `..\evil` is written as a literal filename and
   passes `starts-with?` containment checks. Normalize entry names (`\` → `/`)
   before containment checks (see `kmet.build/extract-archive!`).
+- **`fs/relativize` is not normalized the same way on both hosts**: bb's
+  (java.nio `Path.relativize`) collapses a `./` segment, jolt's keeps it
+  (`(fs/relativize cwd "/abs/./a/b.cljc")` → `a/b.cljc` vs `./a/b.cljc`), so
+  any result that is compared or used as a path segment needs an explicit
+  `fs/normalize` (see `kmet.lint/repo-relative`).
 - **clj-kondo `--config` on the CLI works** (e.g. `--config
   '{:linters {:namespace-name-mismatch {:level :off}}}'`), but there is no
   blanket `:all` linter key, and the finding type for "X already refers to

@@ -1,0 +1,39 @@
+{;; The JOLT view's overlay for `lint` / `lint-changed` (kmet.lint), merged
+ ;; ON TOP of .clj-kondo/config.edn via CLJ_KONDO_EXTRA_CONFIG_DIR: same hooks
+ ;; and linters, plus the differences the jolt reader view needs. Both
+ ;; `bb lint` and `jolt lint` run this pass — over the projection of the files
+ ;; carrying a :jolt branch plus jolt/, and over the raw read of the files
+ ;; carrying a :bb one (clj-kondo skips an unknown feature exactly as jolt
+ ;; does). The babashka view's pass covers everything else.
+ ;;
+ ;; :exclude-files — a later config layer wins for a scalar, so this list
+ ;; replaces the project one: it un-excludes `jolt/`, whose provider-lib
+ ;; projection lives under target/jolt-lint/jolt/ and must be linted here.
+ ;; test/fixtures stay excluded — those files are broken on purpose.
+ :exclude-files "(test/fixtures/).*"
+
+ :lint-as
+ {;; jolt.ffi's macros define vars (defcfn) and bind locals (with-*); without
+  ;; these clj-kondo cannot see what they introduce.
+  jolt.ffi/defcfn clojure.core/def
+  jolt.ffi/with-alloc clojure.core/let
+  jolt.ffi/with-c-string clojure.core/let}
+
+ :linters
+ {;; the jolt runtime API clj-kondo cannot know: the terminal backend's FFI
+  ;; seam and the provider lib's host seam (a typo still surfaces — jolt.fi
+  ;; is not excluded), plus the clojure.core functions jolt adds for RFC 0014
+  ;; registration.
+  :unresolved-namespace {:exclude [jolt.ffi jolt.host]}
+  :unresolved-var {:exclude [clojure.core/__register-class-statics!
+                             clojure.core/__register-class-methods!
+                             clojure.core/__register-class-ctor!]}}
+
+ :config-in-ns
+ {;; jolt resolves function-body symbols at call time, so these bb-only paths
+  ;; load on jolt too — dead there, not broken: extension contexts are SCI
+  ;; (babashka-only), and kmet.build is the babashka packaging pipeline (jolt
+  ;; gets its own packager — jolt-port.md M5/M6). Their requires sit in the
+  ;; :bb branch (skipped here), the references outside it.
+  kmet.app.extensions {:linters {:unresolved-namespace {:exclude [sci]}}}
+  kmet.build {:linters {:unresolved-namespace {:exclude [bcp]}}}}}
