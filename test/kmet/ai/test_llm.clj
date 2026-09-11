@@ -1440,7 +1440,7 @@
                            rdr (java.io.BufferedReader.
                                 (java.io.InputStreamReader. (.getInputStream s)))]
                        ;; drain request headers
-                       (while (seq (str/trim (or (.readLine rdr) ""))) nil)
+                       (while (seq (or (.readLine rdr) "")) nil)
                        (let [out (.getOutputStream s)
                              stream-body (str "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"
                                               "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n"
@@ -1488,7 +1488,7 @@
                            rdr (java.io.BufferedReader.
                                 (java.io.InputStreamReader. (.getInputStream s)))]
                        ;; drain request headers, then stall — never respond
-                       (while (seq (str/trim (or (.readLine rdr) ""))) nil)
+                       (while (seq (or (.readLine rdr) "")) nil)
                        (Thread/sleep 5000)
                        (.close s))
                      (catch Exception _ nil))))
@@ -1531,7 +1531,7 @@
                      (let [s (.accept ss)
                            rdr (java.io.BufferedReader.
                                 (java.io.InputStreamReader. (.getInputStream s)))]
-                       (while (seq (str/trim (or (.readLine rdr) ""))) nil)
+                       (while (seq (or (.readLine rdr) "")) nil)
                        (let [out (.getOutputStream s)]
                          (sock-write out (.getBytes "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n"))
                          (.flush out)
@@ -1694,7 +1694,7 @@
                            req-headers (atom {})
                            _ (loop []
                                (let [line (.readLine rdr)]
-                                 (when (seq (str/trim (or line "")))
+                                 (when (seq (or line ""))
                                    (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs line 15)))))
                                    (when-let [colon (str/index-of line ":")]
@@ -1808,7 +1808,7 @@
                            clen (atom 0)
                            _ (loop []
                                (let [line (.readLine rdr)]
-                                 (when (seq (str/trim (or line "")))
+                                 (when (seq (or line ""))
                                    (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs line 15)))))
                                    (recur))))
@@ -2030,7 +2030,7 @@
                            req-headers (atom {})
                            _ (loop []
                                (let [line (.readLine rdr)]
-                                 (when (seq (str/trim (or line "")))
+                                 (when (seq (or line ""))
                                    (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs line 15)))))
                                    (when-let [colon (str/index-of line ":")]
@@ -2125,7 +2125,7 @@
                            req-headers (atom {})
                            _ (loop []
                                (let [line (.readLine rdr)]
-                                 (when (seq (str/trim (or line "")))
+                                 (when (seq (or line ""))
                                    (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs line 15)))))
                                    (when-let [colon (str/index-of line ":")]
@@ -2213,7 +2213,7 @@
                            req-headers (atom {})
                            _ (loop []
                                (let [line (.readLine rdr)]
-                                 (when (seq (str/trim (or line "")))
+                                 (when (seq (or line ""))
                                    (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs line 15)))))
                                    (when-let [colon (str/index-of line ":")]
@@ -2302,7 +2302,7 @@
                            clen (atom 0)
                            _ (loop []
                                (let [l (.readLine rdr)]
-                                 (when (seq (str/trim (or l "")))
+                                 (when (seq (or l ""))
                                    (when (str/starts-with? (str/lower-case (or l "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs l 15)))))
                                    (recur))))
@@ -2691,7 +2691,7 @@
                              req-headers (atom {})
                              _ (loop []
                                  (let [line (.readLine rdr)]
-                                   (when (seq (str/trim (or line "")))
+                                   (when (seq (or line ""))
                                      (when (str/starts-with? (str/lower-case (or line "")) "content-length:")
                                        (reset! clen (Long/parseLong (str/trim (subs line 15)))))
                                      (when-let [colon (str/index-of line ":")]
@@ -2794,7 +2794,7 @@
                            req-headers (atom {})
                            _ (loop []
                                (let [l (.readLine rdr)]
-                                 (when (seq (str/trim (or l "")))
+                                 (when (seq (or l ""))
                                    (when (str/starts-with? (str/lower-case (or l "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs l 15)))))
                                    (when-let [colon (str/index-of l ":")]
@@ -2891,7 +2891,7 @@
                            clen (atom 0)
                            _ (loop []
                                (let [l (.readLine rdr)]
-                                 (when (seq (str/trim (or l "")))
+                                 (when (seq (or l ""))
                                    (when (str/starts-with? (str/lower-case (or l "")) "content-length:")
                                      (reset! clen (Long/parseLong (str/trim (subs l 15)))))
                                    (recur))))

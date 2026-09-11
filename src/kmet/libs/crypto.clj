@@ -15,19 +15,6 @@
   (:require [kmet.libs.json :as json]
             [clojure.string :as str]))
 
-;; (jolt only) Install kmet's Base64 shim before this file's class references
-;; analyze. The crypto classes used below (KeyFactory,
-;; Signature) autoload jolt.crypto through its own :jolt/provides claims and
-;; HttpTimeoutException autoloads jolt.kmet.providers' claim — but a claim on
-;; java.util.Base64 is refused (the runtime implements the class), so its
-;; missing getMimeDecoder is installed only by this guarded require and the
-;; reference below would fail to analyze without it.
-;; A plain require is impossible (this .clj also loads on bb, where no jolt.*
-;; namespace exists), so the require is guarded by the jolt-version marker
-;; kmet.runner uses. Must stay the first form after the ns.
-(when (find-var 'clojure.core/*jolt-version*)
-  (require 'jolt.kmet.providers))
-
 ;; ─── Base64url ────────────────────────────────────────────────────────────
 
 (defn base64url

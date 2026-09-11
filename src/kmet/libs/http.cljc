@@ -505,9 +505,7 @@
   "Parse curl's --dump-header output into [status headers]: the LAST
    HTTP/1.x or HTTP/2 status line (after -L redirect hops) and the header
    block that follows it, keys lowercased, duplicates joined with ', '
-   (babashka's convention). Values are trimmed: curl writes CRLF line
-   endings and Jolt's regex engine leaves the trailing \\r in the
-   capture, so without the trim every value would carry it."
+   (babashka's convention)."
   [f]
   (let [lines (str/split-lines (slurp f))
         status-idxs (keep-indexed (fn [i l] (when (re-find #"^HTTP/\S+\s+\d{3}" l) i))
@@ -518,8 +516,7 @@
         headers (if (seq status-idxs)
                   (reduce (fn [m l]
                             (if-let [[_ k v] (re-matches #"^([^:]+):\s*(.*)" l)]
-                              (let [k (str/lower-case k)
-                                    v (str/trim v)]
+                              (let [k (str/lower-case k)]
                                 (if (contains? m k)
                                   (update m k str ", " v)
                                   (assoc m k v)))

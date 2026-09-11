@@ -234,17 +234,10 @@
   (let [reader (java.io.BufferedReader. (java.io.InputStreamReader. in "UTF-8"))
         request-line (try (.readLine reader) (catch Exception _ nil))]
     (when (seq request-line)
-      ;; Header block ends at the first blank line. The emptiness check must
-      ;; trim: jolt's readLine on this path (and its InputStreamReader) keeps
-      ;; the trailing \\r — re-checked on v0.8.6-72-g0f7d1a11: a line
-      ;; "x\\r\\n" still reads "x\\r" (v0.8.6's fix covered System/in's
-      ;; read-line only) — so the blank line arrives as "\\r": a bare (seq line)
-      ;; test would read one line past the header block and block forever waiting for more
-      ;; input (the browser/curl waits for the response → deadlock; test_http
-      ;; read-request carries the same workaround).
+      ;; Header block ends at the first blank line (readLine drops the CRLF).
       (loop []
         (let [line (try (.readLine reader) (catch Exception _ nil))]
-          (when (and line (seq (str/trim line))) (recur))))
+          (when (and line (seq line)) (recur))))
       (let [[method target] (str/split request-line #"\s+" 3)
             [path query-string] (str/split (or target "") #"\?" 2)]
         {:method (or method "")

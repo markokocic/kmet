@@ -266,9 +266,9 @@
 
 (t/deftest test-bash-executor-streaming-utf8-decode
   (t/testing "a multi-byte char split across reads reassembles (pi TextDecoder stream: true)"
-    ;; execute-bash decoded the stream with the JVM CharsetDecoder, which
-    ;; Jolt does not implement (no CodingErrorAction, no .decode) — the
-    ;; portable decoder carries a split sequence into the next read.
+    ;; The stream is decoded by a CharsetDecoder with CodingErrorAction/REPLACE
+    ;; fed one chunk at a time: a split sequence stays in the input buffer and
+    ;; rides into the next read.
     (let [feed (fn [chunks]
                  (:output
                   (bash-exec/execute-bash

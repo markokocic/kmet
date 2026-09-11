@@ -66,6 +66,17 @@
   next to the binary: glibc linker exec + `--jar <self>` (auto-detection breaks because
   `/proc/self/exe` resolves to `ld-linux`). Downloads cached + sha256-checked in
   `target/build-cache/`.
+- **Jolt packaging** (`kmet.build-jolt`, the `build-jolt` task — run as `jolt build-jolt`):
+  jolt AOT-compiles the app instead of appending an uberjar, so there is no jar step and
+  nothing to download. Artifact `dist/kmet-<ver>-jolt<jv>-<os>-<arch>[-dev][.exe]`, compiled
+  into `target/jolt/<slug>/<mode>/` so jolt's incremental build (its `.build/` payload dir)
+  never lands in `dist/`, then smoke-tested with `--list-models` from an empty temp dir with
+  `JOLT_PWD` pointed at it — io/resource falls back to JOLT_PWD-relative source roots, so a run
+  from the checkout would pass without the `deps.edn :jolt/build {:embed ["src"]}` that bakes
+  the model catalogs in. The task is `build-jolt`, not `build`: jolt's built-in `build` owns
+  that name, and a task claiming it (`:override-builtin`) would make the wrapper's own
+  `jolt build` call re-enter the task forever. Termux gets a `.sh` launcher through the glibc
+  linker, like `bb build`'s minus `--jar`.
 
 ### API Preferences (avoid Java interop)
 - **`babashka.fs`** over `java.io.File` for all file operations
@@ -171,28 +182,29 @@ extension contract root: namespaces extensions depend on, init/shutdown, api).
 
 ### jolt/ — the RFC 0014 provider contract
 `jolt/` supplies JDK classes the jolt ecosystem lacks (details: jolt/README.md,
-jolt-port.md §9): currently `java.util.Base64/getMimeDecoder` and the
-`java.net.http.HttpTimeoutException` ctor. RSA is no longer in this list —
-jolt.crypto provides `Signature`/`KeyPairGenerator`/`KeyFactory` for RSA and
-EC and claims those classes in its own `:jolt/provides` (a class may have a
-single provider); the JWK bigint→DER conversion lives in
-`kmet.libs.crypto/bigint->bytes` (portable, both hosts).
+jolt-port.md §9): currently the `java.net.http.HttpTimeoutException` ctor.
+RSA is not in this list — jolt.crypto provides
+`Signature`/`KeyPairGenerator`/`KeyFactory` for RSA and EC and claims those
+classes in its own `:jolt/provides` (a class may have a single provider);
+the JWK bigint→DER conversion lives in `kmet.libs.crypto/bigint->bytes`
+(portable, both hosts); `java.util.Base64` is runtime surface (the MIME pair
+included), so nothing here.
 `jolt.kmet.providers` requires nothing but `jolt.host`: crypto's classes
 resolve through `jolt.crypto`'s own `:jolt/provides` claims, a declared
 provider resolving its class whatever loaded first and being attributed to
 itself.
-Convention: a src ns whose forms reference a class jolt lacks adds the
-guarded require as its first form after the ns:
+Convention: a src ns whose forms reference a member of a class the runtime
+IMPLEMENTS but does not fully supply adds the guarded require as its first
+form after the ns:
 
 ```clojure
 (when (find-var 'clojure.core/*jolt-version*)
   (require 'jolt.kmet.providers))
 ```
 
-The guard is what installs a member of a class the runtime IMPLEMENTS but
-does not fully supply (`java.util.Base64/getMimeDecoder`): jolt refuses
-claims on implemented classes, so nothing autoloads — `kmet.libs.crypto` and
-`kmet.ai.google-adc` keep the guard for it. Classes kmet or jolt.crypto
+Such a member cannot be `:jolt/provides`-claimed (jolt refuses claims on
+implemented classes), so nothing autoloads and the guard is the only install
+path — no kmet namespace needs it today. Classes kmet or jolt.crypto
 declares in `:jolt/provides` (`HttpTimeoutException`,
 `Signature`/`KeyPairGenerator`/`KeyFactory`) need no guard: the claimer's
 install namespace loads on the first reference, whatever loaded first.

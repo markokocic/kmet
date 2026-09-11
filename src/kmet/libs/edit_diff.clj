@@ -149,12 +149,9 @@
 
 (defn- normalize-for-fuzzy-match
   "Pi: normalizeForFuzzyMatch — NFKC normalize, strip trailing whitespace per
-   line, and normalize smart quotes/dashes/spaces to ASCII. The NFKC step
-   is best-effort: java.text.Normalizer is unshimmed on Jolt, where the
-   remaining rules still cover the fuzzy cases the edit tool relies on."
+   line, and normalize smart quotes/dashes/spaces to ASCII."
   [text]
-  (-> (try (java.text.Normalizer/normalize text java.text.Normalizer$Form/NFKC)
-           (catch Exception _ text))
+  (-> (java.text.Normalizer/normalize text java.text.Normalizer$Form/NFKC)
       (as-> s (->> (str/split-lines s)
                    (map #(str/replace % #"\s+$" ""))
                    (str/join "\n")))

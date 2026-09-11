@@ -315,17 +315,12 @@
         [{:type :error :message (str "Parse error: " (ex-message e))}]))))
 
 (defn- body->reader
-  "Response :body to a java.io.Reader. A body that already IS a Reader
-   (tests pass proxy Readers to fail the read on demand) is used directly:
-   io/reader rejects those on Jolt (\"Cannot open <reify> as a Reader\"),
-   and every consumer here reads via .read only (see
-   make-idle-line-reader), so no BufferedReader wrapper is needed on
-   either host. Anything else (production InputStreams) goes through
-   io/reader as before."
+  "Response :body to a java.io.Reader. io/reader wraps a user-implemented
+   Reader in a delegating BufferedReader that drives its .read (and
+   forwards .close), so both production InputStreams and proxy Readers
+   (tests fail the read on demand) end up with .read/.readLine/.close."
   [body]
-  (if (instance? java.io.Reader body)
-    body
-    (io/reader body)))
+  (io/reader body))
 
 (defn process-responses-stream
   "Read an OpenAI Responses stream response body, buffering multi-line event
@@ -487,9 +482,11 @@
      t]))
 
 (defn- strip-trailing-cr
-  "Drop a single trailing CR so the .read loop matches .readLine on CRLF
-   input: a kept CR would stop a blank separator line from reading empty
-   and stall Anthropic/Responses event buffering."
+  "Drop a single trailing CR so the idle arm's .read loop matches .readLine
+   on CRLF input: the loop splits on \\n only, so a kept CR would stop a
+   blank separator line from reading empty and stall Anthropic/Responses
+   event buffering. (The non-idle arm calls .readLine, which ends a line
+   on \\r, \\n or \\r\\n itself.)"
   [s]
   (if (str/ends-with? s "\r") (subs s 0 (dec (count s))) s))
 
@@ -520,10 +517,10 @@
       {:read-line #(read-line-from read-char)
        :stop stop
        :thread thread})
-    ;; No .readLine here: Jolt's BufferedReader ctor returns the wrapped
-    ;; stream, so a proxy Reader has no readLine method. The .read loop
-    ;; serves both hosts (and keeps CR handling identical to the idle path).
-    {:read-line #(read-line-from (fn [] (try (.read rdr) (catch Exception e e))))
+    ;; A real .readLine: io/reader's BufferedReader ends a line on \n, \r
+    ;; or \r\n, so no char-assembly loop (and no CR strip) is needed when
+    ;; the idle timeout is off.
+    {:read-line #(try (.readLine rdr) (catch Exception e e))
      :stop (fn [])
      :thread nil}))
 
@@ -573,10 +570,9 @@
         ((:stop idle))
         (when-let [t (:thread idle)]
           (.join t 2000))
-        ;; proxy Readers implement only the read arities they override —
-        ;; .close dispatches to a missing method on Jolt (the error path
-        ;; owns the resource anyway), so a close failure must not surface
-        ;; as a second event behind the real error.
+        ;; close can fail on a transport that already errored — the error
+        ;; path owns the resource, so it must not surface as a second event
+        ;; behind the real error.
         (try (.close rdr) (catch Exception _ nil))))))
 
 (defn- process-data-stream

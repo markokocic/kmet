@@ -37,24 +37,16 @@
 (defn- read-request
   "Read [req-line headers-map body-reader] off socket S: the request line,
    the headers, and the SAME BufferedReader that consumed the header block
-   (a fresh reader on the raw stream would lose buffered body bytes).
-   Lines are trimmed before the blank-line check and header values are
-   trimmed: jolt's readLine on this path (and its InputStreamReader) keeps
-   the trailing \\r — re-checked on v0.8.6-72-g0f7d1a11, where a socket line
-   \"x\\r\\n\" still reads \"x\\r\" (v0.8.6's fix covered System/in's read-line
-   only) — so a bare (seq l) test would read one line past the header block — and
-   Jolt's InputStreamReader pre-buffers the socket, so that extra read
-   consumes the response window (curl then times out) — and every parsed
-   value would carry a trailing \\r."
+   (a fresh reader on the raw stream would lose buffered body bytes)."
   [s]
   (let [rdr (java.io.BufferedReader.
              (java.io.InputStreamReader. (.getInputStream s)))
         req-line (.readLine rdr)]
     (loop [m {}]
       (let [l (.readLine rdr)]
-        (if (seq (str/trim (or l "")))
+        (if (seq (or l ""))
           (recur (if-let [[_ k v] (re-matches #"^([^:]+):\s*(.*)" l)]
-                   (assoc m (str/lower-case k) (str/trim v))
+                   (assoc m (str/lower-case k) v)
                    m))
           [req-line m rdr])))))
 

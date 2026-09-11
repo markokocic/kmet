@@ -57,30 +57,6 @@
             sliced (java.util.Arrays/copyOfRange bs start n)]
         (String. sliced "UTF-8")))))
 
-(defn- utf8-complete-end
-  "Index one past the last COMPLETE UTF-8 sequence in BUF[START,END). Bytes
-   from the returned index to END are a multi-byte sequence whose
-   continuation bytes have not arrived yet — a read boundary is not a
-   character boundary, so the caller carries them into the next chunk.
-   Malformed tails (an invalid continuation, four or more stray continuation
-   bytes, an invalid lead) are not carried: they are left for the host's
-   UTF-8 conversion to replace."
-  [buf start end]
-  (loop [i (dec end), cont 0]
-    (cond
-      (< i start) end
-      (> cont 3) end
-      (= 0x80 (bit-and (aget buf i) 0xC0)) (recur (dec i) (inc cont))
-      :else
-      (let [b (bit-and (aget buf i) 0xFF)
-            need (cond
-                   (< b 0x80) 1
-                   (< b 0xE0) 2
-                   (< b 0xF0) 3
-                   (< b 0xF8) 4
-                   :else 1)]
-        (if (< end (+ i need)) i end)))))
-
 (def ^:private ANSI-PATTERN
   #"\u001b\[[0-9;]*[a-zA-Z]|\u001b\][^\u0007\u001b\u009c]*(?:\u001b\\|\u0007|\u009c)")
 (defn- strip-ansi [s] (str/replace s ANSI-PATTERN ""))
@@ -282,14 +258,14 @@
                     (when-not @done
                       (reset! timed-out true)
                       (process/kill-process-tree! pid)))))
-            read-stream (fn [stream]
+            read-stream (fn [stream tag]
                           (let [buf (byte-array 8192)]
                             (loop [] (let [n (.read stream buf)]
-                                       (when (pos? n) (on-data buf 0 n) (recur))))))
-            out-future (future (try (read-stream (:out p))
+                                       (when (pos? n) (on-data buf 0 n tag) (recur))))))
+            out-future (future (try (read-stream (:out p) :stdout)
                                     (catch Exception e (debug/log "ops stdout: " e))))
             err-future (when-let [err-stream (:err p)]
-                         (future (try (read-stream err-stream)
+                         (future (try (read-stream err-stream :stderr)
                                       (catch Exception e (debug/log "ops stderr: " e)))))
             ;; Pi: cancel signal — a poller that kills the process tree when the
             ;; signal fires mid-run. `done` lets the poller exit on normal
@@ -397,71 +373,98 @@
                    (catch Exception e
                      (debug/log "bash chunk callback: " e))))))
 
-        ;; Pi: streaming UTF-8 decoder (TextDecoder with {stream: true}).
-        ;; The JVM CharsetDecoder is not an option on Jolt (no
-        ;; CodingErrorAction, no .decode/.onMalformedInput), so the stream is
-        ;; reassembled from complete sequences instead: CARRY holds the ≤3
-        ;; bytes of a sequence split across reads, and each completed run
-        ;; decodes through the host's own UTF-8 conversion (malformed bytes
-        ;; become U+FFFD — the textual equivalent of REPLACE).
-        carry
-        (atom nil)
-
-        decode-chunk
-        (fn [raw-bytes offset len]
-          (let [pending @carry
-                pending-len (if pending (alength pending) 0)
-                buf (if (zero? pending-len)
-                      raw-bytes
-                      (let [b (byte-array (+ pending-len len))]
-                        (System/arraycopy pending 0 b 0 pending-len)
-                        (System/arraycopy raw-bytes offset b pending-len len)
-                        b))
-                start (if (zero? pending-len) offset 0)
-                end (+ start pending-len len)
-                cut (utf8-complete-end buf start end)]
-            (reset! carry (when (< cut end) (java.util.Arrays/copyOfRange buf cut end)))
-            (when (< start cut)
-              (String. buf start (- cut start) "UTF-8"))))
-
-        finish-utf8
+        ;; Pi: streaming UTF-8 decoder (TextDecoder with {stream: true}) per
+        ;; stream: a CharsetDecoder with REPLACE fed that stream's chunks. A
+        ;; multi-byte sequence split across reads stays in the decoder's
+        ;; input buffer (UNDERFLOW) and rides into that stream's next chunk;
+        ;; a sequence stranded at EOF decodes as U+FFFD. stdout and stderr
+        ;; are independent streams — a partial sequence at the end of one's
+        ;; chunk never combines with the other's bytes.
+        make-decode-state
         (fn []
-          (when-let [pending @carry]
-            (reset! carry nil)
-            (String. pending "UTF-8")))
+          (let [decoder (doto (.newDecoder (java.nio.charset.Charset/forName "UTF-8"))
+                          (.onMalformedInput java.nio.charset.CodingErrorAction/REPLACE)
+                          (.onUnmappableCharacter java.nio.charset.CodingErrorAction/REPLACE))
+                ;; Capacity 8192 (the read-stream buffer) + 3: the carry
+                ;; after .compact is at most a 3-byte partial sequence.
+                decode-in (java.nio.ByteBuffer/allocate (+ 8192 3))
+                decode-out (java.nio.CharBuffer/allocate 8192)
+                append-out!
+                (fn [^StringBuilder sb]
+                  (.flip decode-out)
+                  (.append sb decode-out)
+                  (.clear decode-out))
+                decode-into!
+                (fn [sb end?]
+                  (loop []
+                    (let [res (.decode decoder decode-in decode-out end?)]
+                      (when (.isError res)
+                        (throw (ex-info "UTF-8 decode error" {:result (str res)})))
+                      (append-out! sb)
+                      (when (.isOverflow res) (recur)))))]
+            {:chunk
+             (fn [raw-bytes offset len]
+               (when (pos? len)
+                 (.put decode-in raw-bytes offset len))
+               (.flip decode-in)
+               (let [sb (StringBuilder.)]
+                 (decode-into! sb false)
+                 (.compact decode-in)
+                 (let [s (str sb)]
+                   (when (pos? (count s)) s))))
+             :finish
+             (fn []
+               (.flip decode-in)
+               (let [sb (StringBuilder.)]
+                 (decode-into! sb true)
+                 (loop []
+                   (let [res (.flush decoder decode-out)]
+                     (when (.isError res)
+                       (throw (ex-info "UTF-8 flush error" {:result (str res)})))
+                     (append-out! sb)
+                     (when (.isOverflow res) (recur))))
+                 (let [s (str sb)]
+                   (when (pos? (count s)) s))))}))
+
+        decode-states {:stdout (make-decode-state)
+                       :stderr (make-decode-state)}
 
         handle-raw-bytes
-        (fn [raw-bytes offset len]
-          (if (or @temp-file-stream @temp-file-path
-                  (> @total-decoded-bytes max-bytes))
-            (do
-              (when (nil? @temp-file-path)
-                (let [path (create-temp-file)
-                      output-stream (java.io.FileOutputStream. path)]
-                  (reset! temp-file-path path)
-                  (reset! temp-file-stream output-stream)
-                  (doseq [[data start end] @raw-chunks]
-                    (.write output-stream data start (- end start)))
-                  (.write output-stream raw-bytes offset len)
-                  (.flush output-stream)))
-              (when @temp-file-stream
-                (.write @temp-file-stream raw-bytes offset len)
-                (.flush @temp-file-stream)))
-            (let [copy (java.util.Arrays/copyOfRange raw-bytes offset (+ offset len))]
-              (swap! raw-chunks conj [copy 0 (alength copy)])))
-          ;; Pi: streaming decode — handles multi-byte sequences split across chunks
-          (when-let [decoded (decode-chunk raw-bytes offset len)]
-            (let [clean (sanitize-output decoded)]
-              (when (seq clean)
-                (handle-text clean)))))
+        (fn handle-raw-bytes
+          ([raw-bytes offset len] (handle-raw-bytes raw-bytes offset len :stdout))
+          ([raw-bytes offset len stream]
+           (if (or @temp-file-stream @temp-file-path
+                   (> @total-decoded-bytes max-bytes))
+             (do
+               (when (nil? @temp-file-path)
+                 (let [path (create-temp-file)
+                       output-stream (java.io.FileOutputStream. path)]
+                   (reset! temp-file-path path)
+                   (reset! temp-file-stream output-stream)
+                   (doseq [[data start end] @raw-chunks]
+                     (.write output-stream data start (- end start)))
+                   (.write output-stream raw-bytes offset len)
+                   (.flush output-stream)))
+               (when @temp-file-stream
+                 (.write @temp-file-stream raw-bytes offset len)
+                 (.flush @temp-file-stream)))
+             (let [copy (java.util.Arrays/copyOfRange raw-bytes offset (+ offset len))]
+               (swap! raw-chunks conj [copy 0 (alength copy)])))
+           ;; Pi: streaming decode — handles multi-byte sequences split across chunks
+           (when-let [decoded ((:chunk (get decode-states stream :stdout)) raw-bytes offset len)]
+             (let [clean (sanitize-output decoded)]
+               (when (seq clean)
+                 (handle-text clean))))))
 
         finalize
         (fn []
           (when @temp-file-stream
             (try (.close @temp-file-stream) (catch Exception _ nil))
             (reset! temp-file-stream nil))
-          ;; Pi: flush remaining bytes from streaming decoder (end-of-input)
-          (when-let [flushed (finish-utf8)]
+          ;; Pi: flush remaining bytes from each stream's decoder (end-of-input)
+          (doseq [state [(:stdout decode-states) (:stderr decode-states)]
+                  :let [flushed ((:finish state))]
+                  :when flushed]
             (let [clean (sanitize-output flushed)]
               (when (seq clean)
                 (handle-text clean))))

@@ -1,7 +1,7 @@
 # jolt/ — kmet's RFC 0014 provider lib
 
 Clojure/JDK shims for the functionality the jolt ecosystem does not supply
-that kmet's crypto/oauth/ADC paths need (jolt-port.md §9). This
+that kmet's transport-error classifier needs (jolt-port.md §9). This
 directory is a self-contained library: `jolt/deps.edn` declares its source
 root and its `:jolt/provides` (RFC 0014); kmet's root `deps.edn` pulls it in
 as `{:local/root "jolt"}`. It is **inert on bb/JVM** — nothing on the bb
@@ -9,16 +9,14 @@ classpath ever requires a `jolt.kmet.*` namespace, and the class registrations
 below are jolt-only hooks.
 
 **Scope:** what the jolt runtime lacks and jolt.crypto does not cover:
-`java.util.Base64/getMimeDecoder` and the `java.net.http.HttpTimeoutException`
-ctor. RSA is jolt.crypto's — it provides `Signature` / `KeyPairGenerator` /
-`KeyFactory` for RSA (and EC) and claims those classes itself. **Re-verified
-2026-09-11 on
-upstream main (`v0.8.6-72-g0f7d1a11`, locally built):** both are still
-missing without this provider — a bare `(java.util.Base64/getMimeDecoder)`
-answers `No matching field or method: java.util.Base64/getMimeDecoder` and
-a bare `(java.net.http.HttpTimeoutException. "x")` answers
+the `java.net.http.HttpTimeoutException` ctor. RSA is jolt.crypto's — it
+provides `Signature` / `KeyPairGenerator` / `KeyFactory` for RSA (and EC)
+and claims those classes itself. `java.util.Base64` is runtime surface
+(the MIME pair is registered with the other statics), so nothing here.
+**Re-verified 2026-09-11 on `v0.8.6-86-g234f460b` (locally built):** a bare
+`(java.net.http.HttpTimeoutException. "x")` answers
 `No matching ctor found for class java.net.http.HttpTimeoutException` — so
-the lib stays as is (open upstream gaps: `jolt-bugs.md`).
+the lib stays for that one gap (open upstream: `jolt-bugs.md`).
 
 ## No `jolt.crypto` require
 
@@ -42,23 +40,15 @@ order requirements:
   / `KeyFactory` (EC and RSA) and the spec classes — a dependent referencing
   one of those autoloads crypto directly, with no kmet involvement.
 
-The one mechanism left is the **guarded require** in the kmet namespaces
-that reference the classes directly (`kmet.libs.crypto`,
-`kmet.ai.google-adc`) — a top-level
-`(when (find-var 'clojure.core/*jolt-version*) (require 'jolt.kmet.providers))`
-as the first form after the `ns`. It exists for `java.util.Base64` only: a
-claim on it is refused because the runtime implements the class, so the guard
-is the only install path (verified: without it, `No matching field or method:
-java.util.Base64/getMimeDecoder`). The class kmet claims
-(`HttpTimeoutException`) resolves through its own `:jolt/provides` — verified:
-a bare `(java.net.http.HttpTimeoutException. "x")` autoloads the provider
-with no guard at all.
+No guarded require is needed either: the class kmet claims
+(`HttpTimeoutException`) resolves through its own `:jolt/provides` —
+verified: a bare `(java.net.http.HttpTimeoutException. "x")` autoloads the
+provider with no guard at all.
 
 ## What is provided
 
 | class/member | notes |
 |---|---|
-| `java.util.Base64/getMimeDecoder` | PEM bodies carry newlines; jolt's basic decoder rejects them. MIME rules: discard every non-alphabet char, decode 4→3. Returns the same `[B` type core's decoder returns. |
 | `java.net.http.HttpTimeoutException` ctor | class modelled, no ctor registered (open upstream gap — `jolt-bugs.md`). `jolt.host/throwable` builds a host throwable answering `(class e)`/`ex-message` like the JDK's — all kmet's transport-error classifier reads. |
 
 ## Verification
@@ -66,10 +56,9 @@ with no guard at all.
 ```sh
 # loads standalone: jolt.host only, no jolt.crypto require
 jolt -e "(require 'jolt.kmet.providers)"
-# shims live:
-jolt -e "(println (String. (.decode (java.util.Base64/getMimeDecoder) \"aGVs\nbG8=\") \"UTF-8\"))"   ; hello
+# shim live:
 jolt -e "(println (class (java.net.http.HttpTimeoutException. \"x\")))"
-# kmet guards (bb: no-op):
+# kmet loads (bb: no-op):
 bb -e "(require 'kmet.libs.crypto) (println :ok)"
 jolt -e "(require 'kmet.libs.crypto) (println :ok)"
 ```
