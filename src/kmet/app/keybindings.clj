@@ -19,6 +19,7 @@
    "app.exit"                   {:default-keys ["ctrl+d"]                 :description "Exit when editor is empty"}
    "app.suspend"                {:default-keys ["ctrl+z"]                 :description "Suspend to background"}
    "app.thinking.cycle"         {:default-keys ["shift+tab"]              :description "Cycle thinking level"}
+   "app.thinking.save"          {:default-keys ["ctrl+s"]                 :description "Save thinking level"}
    "app.model.cycleForward"     {:default-keys ["ctrl+p"]                 :description "Cycle to next model"}
    "app.model.cycleBackward"    {:default-keys ["shift+ctrl+p"]           :description "Cycle to previous model"}
    "app.model.select"           {:default-keys ["ctrl+l"]                 :description "Open model selector"}

@@ -44,7 +44,7 @@
 (defn- key-or
   "The resolved key text for a keybinding id, or FALLBACK when unbound."
   [id fallback]
-  (let [t (app-kb/key-text id)]
+  (let [t (app-kb/key-label id)]
     (if (seq t) t fallback)))
 
 (defn- fuzzy-match?
@@ -120,10 +120,10 @@
               (cb level)))
           nil)
 
-        ;; Ctrl+S — apply AND persist as the default thinking level (pi:
-        ;; ThinkingSelectorComponent.handleInput matches ctrl+s before the
-        ;; select-list navigation and calls onSelectAsDefault)
-        (keys/matches-key? data (keys/ctrl "s"))
+        ;; Ctrl+S — apply AND persist as the default thinking level (pi
+        ;; app.thinking.save, matched before the select-list navigation while
+        ;; calling onSelectAsDefault)
+        (kb/matches-key kmgr data "app.thinking.save")
         (let [level (when (pos? n)
                       (nth filtered (min (:selected-idx st) (dec n))))]
           (when level
@@ -140,8 +140,9 @@
               (thinking-refresh! this)
               nil))
 
-        ;; Escape — cancel
-        (keys/matches-key? data "escape")
+        ;; Escape — cancel (pi tui.select.cancel; the ctrl+c half is handled
+        ;; by the clear-or-cancel leg above)
+        (kb/matches-key kmgr data "tui.select.cancel")
         (do (when-let [cb @on-cancel-atom] (cb)) nil)
 
         ;; Everything else — the search input (the visible filter, pi)
@@ -208,7 +209,8 @@
    level (marked ✓ and selected initially); DEFAULT — the settings default
    (its description gains a \"· default\" note, pi defaultThinkingLevel).
    Callbacks: :on-select (fn [level]) — Enter, session-level change;
-   :on-persist (fn [level]) — Ctrl+S, also the settings default;
+   :on-persist (fn [level]) — app.thinking.save (Ctrl+S), also the
+   settings default;
    :on-cancel."
   [levels current default & {:keys [on-select on-persist on-cancel]}]
   (let [th (theme/get-current-theme)
@@ -238,7 +240,9 @@
             rows-container
             [:spacer {:lines 1}]
             [:text {:padding-x 1 :padding-y 0}
-             (theme/dim "  Enter to select · Ctrl+S to set as default · Esc to cancel")]
+             (theme/dim (str "  " (key-or "tui.select.confirm" "Enter") " to select · "
+                             (key-or "app.thinking.save" "Ctrl+S") " to set as default · "
+                             (key-or "tui.select.cancel" "Esc") " to cancel"))]
             [:spacer {:lines 1}]
             [:dynamic-border {:color-fn #(theme/fg th :accent %)}]])
         sel (map->ThinkingSelector

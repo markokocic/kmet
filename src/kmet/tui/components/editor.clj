@@ -1330,7 +1330,18 @@
               (keys/matches-key? data (keys/alt "enter")))
           (do (add-new-line this) nil)
 
-          (keys/matches-key? data "escape")
+          ;; pi base editor: Ctrl+C is the copy binding and is handed back
+          ;; to the parent (no editing) — after app actions, so app.clear
+          ;; still owns it in the app
+          (kb-match? this data "tui.input.copy")
+          nil
+
+          ;; kmet: the base editor's standalone cancel. pi's Editor has no
+          ;; escape leg (its CustomEditor owns app.interrupt) — resolving
+          ;; through tui.select.cancel keeps the fallback rebindable and
+          ;; matches Input's cancel; in the app an app.interrupt handler
+          ;; consumes escape before this leg.
+          (kb-match? this data "tui.select.cancel")
           (do (reset! jump-mode nil)
               (when-let [cb @on-submit] (cb nil))
               nil)
@@ -1345,18 +1356,19 @@
           (kb-match? this data "tui.editor.undo")
           (do (handle-undo this) nil)
 
-          (keys/matches-key? data (keys/ctrl "z"))
+          (kb-match? this data "tui.editor.redo")
           (do (handle-redo this) nil)
 
           (or (kb-match? this data "tui.input.tab")
               (keys/matches-key? data (keys/ctrl "i")))
           (do (handle-tab this) nil)
 
+          ;; jumpBackward's kmet chord ctrl+shift+] is part of the id's
+          ;; default-keys, so a rebind moves both it and pi's ctrl+alt+]
           (kb-match? this data "tui.editor.jumpForward")
           (do (enter-jump-mode this :forward) nil)
 
-          (or (kb-match? this data "tui.editor.jumpBackward")
-              (keys/matches-key? data (keys/ctrl-shift "]")))
+          (kb-match? this data "tui.editor.jumpBackward")
           (do (enter-jump-mode this :backward) nil)
 
           (kb-match? this data "tui.editor.deleteToLineStart")
@@ -1365,10 +1377,10 @@
           (kb-match? this data "tui.editor.deleteToLineEnd")
           (do (handle-kill-to-line-end this) nil)
 
-          ;; ctrl+w keeps kmet's kill-the-line behavior (an extra pi does not
-          ;; have on this chord); alt+backspace is the managed
-          ;; deleteWordBackward chord below
-          (keys/matches-key? data (keys/ctrl "w"))
+          ;; ctrl+w keeps kmet's kill-the-line behavior (pi has no line kill;
+          ;; deleteWordBackward also claims ctrl+w, so a user rebinding
+          ;; killLine away gets the pi chord back)
+          (kb-match? this data "tui.editor.killLine")
           (do (handle-kill-line this) nil)
 
           (or (kb-match? this data "tui.editor.deleteWordBackward")

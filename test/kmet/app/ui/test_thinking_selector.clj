@@ -139,3 +139,30 @@
       (dotimes [_ 6] (press sel "down") (core/render sel 60))
       (t/is (= baseline (watchers))
             "steady state: navigation does not accumulate watches"))))
+
+(t/deftest test-thinking-save-and-cancel-resolve-through-the-manager
+  (t/testing "app.thinking.save is a real id (pi) — a rebind moves Ctrl+S"
+    (let [persisted (atom ::none)
+          sel (selector :on-persist (fn [level] (reset! persisted level)))]
+      (tui-kb/set-user-bindings! (tui-kb/get-global-keybindings)
+                                 {"app.thinking.save" "ctrl+y"})
+      (try
+        (press sel "ctrl+s")
+        (t/is (= ::none @persisted) "ctrl+s was rebound away")
+        (press sel "\u0019")                    ;; ctrl+y
+        (t/is (= :medium @persisted) "ctrl+y saves the selection")
+        (finally
+          (tui-kb/set-user-bindings! (tui-kb/get-global-keybindings) {})))))
+  (t/testing "escape cancels through tui.select.cancel"
+    (let [cancelled (atom false)
+          sel (selector :on-cancel (fn [] (reset! cancelled true)))]
+      (tui-kb/set-user-bindings! (tui-kb/get-global-keybindings)
+                                 {"tui.select.cancel" "ctrl+x"})
+      (try
+        (press sel "escape")
+        (t/is (false? @cancelled) "escape was rebound away")
+        (press sel "\u0018")                    ;; ctrl+x
+        (t/is (true? @cancelled) "ctrl+x cancels")
+        (finally
+          (tui-kb/set-user-bindings! (tui-kb/get-global-keybindings) {}))))))
+

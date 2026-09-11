@@ -20,7 +20,7 @@
    "tui.editor.cursorLineStart"    {:default-keys ["home" "ctrl+home" "ctrl+a"]     :description "Move to line start"}
    "tui.editor.cursorLineEnd"      {:default-keys ["end" "ctrl+end" "ctrl+e"]      :description "Move to line end"}
    "tui.editor.jumpForward"        {:default-keys ["ctrl+]"]            :description "Jump forward to character"}
-   "tui.editor.jumpBackward"       {:default-keys ["ctrl+alt+]"]        :description "Jump backward to character"}
+   "tui.editor.jumpBackward"       {:default-keys ["ctrl+alt+]" "ctrl+shift+]"] :description "Jump backward to character"}
    "tui.editor.pageUp"             {:default-keys ["pageUp" "ctrl+pageUp"]  :description "Page up"}
    "tui.editor.pageDown"           {:default-keys ["pageDown" "ctrl+pageDown"] :description "Page down"}
    "tui.editor.deleteCharBackward" {:default-keys ["backspace"]         :description "Delete char backward"}
@@ -32,6 +32,13 @@
    "tui.editor.yank"               {:default-keys ["ctrl+y"]            :description "Yank"}
    "tui.editor.yankPop"            {:default-keys ["alt+y"]             :description "Yank pop"}
    "tui.editor.undo"               {:default-keys ["ctrl+-"]            :description "Undo"}
+   ;; kmet extension ids — pi's TUI_KEYBINDINGS has neither a redo (undo is
+   ;; one-way there) nor a line kill. They live here so both stay rebindable
+   ;; through the manager like every pi id (the editor's ctrl+w kill-line
+   ;; takes precedence over deleteWordBackward's ctrl+w, which fires when
+   ;; the user moves killLine elsewhere)
+   "tui.editor.redo"               {:default-keys ["ctrl+z"]            :description "Redo"}
+   "tui.editor.killLine"           {:default-keys ["ctrl+w"]            :description "Delete the current line"}
    "tui.input.newLine"             {:default-keys ["shift+enter" "ctrl+j"] :description "Insert newline"}
    "tui.input.submit"             {:default-keys ["enter"]              :description "Submit input"}
    "tui.input.tab"                {:default-keys ["tab"]                :description "Tab / autocomplete"}

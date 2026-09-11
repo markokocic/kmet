@@ -233,7 +233,15 @@ Full extension API surface (pi `core/extensions/types.ts`) — one remaining gap
   remaining app actions (pi: custom-editor), and the TUI definition table was
   aligned to pi's `TUI_KEYBINDINGS` (`historyPrevious/Next`,
   `jumpForward/Backward`, `yankPop`, `ctrl+left/right`, `ctrl+home/end`,
-  `ctrl+pageUp/Down`)
+  `ctrl+pageUp/Down`). The app panels followed: `app.thinking.save` (a pi id
+  kmet was missing — the thinking selector matched Ctrl+S raw) and the config
+  screen's `tui.select.*`/`tui.input.tab` legs (pi's raw space/ctrl+c kept);
+  kmet-only ids now cover the editor's redo and line kill (pi has the actions
+  without bindings). Remaining raw matches are pi's own (config/settings space,
+  config/scoped ctrl+c, `shift+backspace`-style aliases) or kmet-only extras
+  (ctrl+n/ctrl+p navigation, SelectList home/end and shift+pageUp/Down,
+  SettingsList left/right, auth selector j/k, the tree's legacy `L`) — see
+  `tui.md` §7
 - **`/settings` menu breadth** — kmet `/settings` covers thinking/hide-thinking/retry only;
   **done (theme)**: a theme row (name switch + persist) was added; **done (images)**: the
   Show images / Image width rows (pi: show-images-selector, gated on terminal image

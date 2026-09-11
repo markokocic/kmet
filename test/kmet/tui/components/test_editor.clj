@@ -1143,5 +1143,40 @@
       (core/handle-input e (ctrl 4))
       (t/is (= 1 @exited) "ctrl+d exited the empty editor instead of history"))))
 
+(t/deftest test-editor-extension-ids-and-cancel-are-managed
+  (t/testing "kmet extension ids: redo (ctrl+z) and kill-line (ctrl+w)"
+    (let [e (editor/make-editor)]
+      (doseq [c "ab"] (core/handle-input e (str c)))
+      (core/handle-input e (ctrl 23))
+      (t/is (= "" (editor/editor-get-text e)) "ctrl+w kills the line")
+      (core/handle-input e (ctrl 31))
+      (t/is (= "ab" (editor/editor-get-text e)) "ctrl+- undoes the kill")
+      (core/handle-input e (ctrl 26))
+      (t/is (= "" (editor/editor-get-text e)) "ctrl+z redoes it")))
+  (t/testing "rebinding killLine away hands ctrl+w back to pi's deleteWordBackward"
+    (let [kmgr (app-kb/make-agent-keybindings-manager {"tui.editor.killLine" "ctrl+x"})
+          e (editor/make-editor :keybindings kmgr)]
+      (editor/editor-set-text! e "one two")
+      (core/handle-input e (ctrl 24))
+      (t/is (= "" (editor/editor-get-text e)) "ctrl+x kills the line")
+      (editor/editor-set-text! e "one two")
+      (core/handle-input e (ctrl 23))
+      (t/is (= "one " (editor/editor-get-text e)) "ctrl+w deletes a word (pi)")))
+  (t/testing "escape cancels a standalone editor through tui.select.cancel"
+    (let [submitted (atom ::none)
+          e (editor/make-editor)]
+      (editor/editor-set-on-submit! e (fn [v] (reset! submitted v)))
+      (core/handle-input e K-ESC)
+      (t/is (nil? @submitted) "escape reached on-submit nil")))
+  (t/testing "ctrl+c stays with the parent (pi input.copy), never cancels"
+    (let [submitted (atom ::none)
+          e (editor/make-editor)]
+      (editor/editor-set-on-submit! e (fn [v] (reset! submitted v)))
+      (core/handle-input e (ctrl 3))
+      (t/is (= ::none @submitted) "standalone ctrl+c is a no-op")
+      (t/is (= "" (editor/editor-get-text e))))))
+
+
+
 
 

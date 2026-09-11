@@ -9,6 +9,7 @@
             [kmet.app.packages :as pkgs]
             [kmet.app.ui.resource-config :as rc]
             [kmet.config :as cfg]
+            [kmet.tui.keybindings :as tui-kb]
             [kmet.tui.protocols :as protocols]))
 
 (defn- tmp-dir []
@@ -133,6 +134,51 @@
           (let [entries (user-file-packages ctx)]
             (t/is (str/starts-with? (first (:extensions (first entries))) "+")))
           (t/is (every? :enabled (item-rows screen)))))
+      {:user {:packages [dir]}})))
+
+(t/deftest test-screen-keys-resolve-through-the-manager
+  ;; Follow-up to P3: the screen's navigation/page/confirm/cancel resolve
+  ;; through the global keybindings manager, so user overrides apply. ctrl+p/
+  ;; ctrl+n stay kmet alternate chords; space and ctrl+c stay raw (pi's
+  ;; config-selector matches those raw too).
+  (let [dir (make-package (tmp-dir))]
+    (with-settings
+      (fn [_]
+        (let [kmgr (tui-kb/get-global-keybindings)
+              selected-item (fn [screen]
+                              (let [{:keys [rows selected]} @(:state-atom screen)]
+                                (:item (nth rows selected))))]
+          (tui-kb/set-user-bindings! kmgr {"tui.select.down" "ctrl+j"
+                                           "tui.select.confirm" "ctrl+y"
+                                           "tui.select.cancel" "ctrl+x"})
+          (try
+            (let [screen (rc/make-resource-config-screen :rows 40)
+                  first-key (pkgs/item-key (selected-item screen))]
+              ;; down (rebound) moves the selection to the second item row
+              (protocols/handle-input screen "\u000a")        ;; ctrl+j
+              (t/is (not= first-key (pkgs/item-key (selected-item screen)))
+                    "ctrl+j moved the selection")
+              (t/is (= (pkgs/item-key (:item (second (item-rows screen))))
+                       (pkgs/item-key (selected-item screen)))
+                    "…onto the second item")
+              ;; confirm (rebound) toggles the selected item; enter no longer
+              ;; does (it falls through to the search input, pi)
+              (protocols/handle-input screen "\r")
+              (t/is (true? (:enabled (first (item-rows screen))))
+                    "enter was rebound away from confirm")
+              (protocols/handle-input screen "\u0019")        ;; ctrl+y
+              (t/is (false? (:enabled (first (item-rows screen))))
+                    "ctrl+y toggles the selected item")
+              ;; the raw space toggle and the ctrl+n alternate chord still work
+              (protocols/handle-input screen " ")
+              (t/is (true? (:enabled (first (item-rows screen))))
+                    "space stays a raw toggle (pi)")
+              (let [before (pkgs/item-key (selected-item screen))]
+                (protocols/handle-input screen "\u000e")      ;; ctrl+n
+                (t/is (not= before (pkgs/item-key (selected-item screen)))
+                      "ctrl+n stays a kmet alternate chord")))
+            (finally
+              (tui-kb/set-user-bindings! kmgr {})))))
       {:user {:packages [dir]}})))
 
 ;; ─── Project scope ────────────────────────────────────────────────────────

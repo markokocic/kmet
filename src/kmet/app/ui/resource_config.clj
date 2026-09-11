@@ -30,6 +30,7 @@
             [kmet.app.packages :as pkgs]
             [kmet.config :as cfg]
             [kmet.tui.components.input :as input]
+            [kmet.tui.keybindings :as kb]
             [kmet.tui.keys :as keys]
             [kmet.tui.macros :refer [defcomponent track!]]
             [kmet.tui.protocols :as protocols]
@@ -370,18 +371,20 @@
         :else (recur (+ idx direction))))))
 
 (defn- page-selection!
-  [this data]
+  "pi pageUp/pageDown scan — jump by maxVisible rows, then to the nearest
+   item row in DIRECTION (+1 forward, -1 backward)."
+  [this direction]
   (swap! (:state-atom this)
          (fn [st]
            (let [rows (:rows st)
                  max-visible (max 5 (- (:rows-count this) chrome-lines))
                  sel (:selected st)
                  n (count rows)
-                 up? (keys/matches-key? data "pageUp")
+                 up? (= -1 direction)
                  target (if up?
                           (max 0 (- sel max-visible))
                           (min (max 0 (dec n)) (+ sel max-visible)))
-                 found (page-target rows target (if up? 1 -1))]
+                 found (page-target rows target direction)]
              (if found
                (assoc st :selected found)
                st)))))
@@ -504,35 +507,42 @@
                       ["" border])))))
 
   (handle-input [this data]
-    (cond
-      (or (keys/matches-key? data "up") (keys/matches-key? data (keys/ctrl "p")))
-      (do (move-selection! this -1) nil)
+    (let [kmgr (kb/get-global-keybindings)]
+      (cond
+        ;; Navigation (pi tui.select.up/down; ctrl+p/ctrl+n are kmet
+        ;; alternate chords, pi has no such extra)
+        (or (kb/matches-key kmgr data "tui.select.up")
+            (keys/matches-key? data (keys/ctrl "p")))
+        (do (move-selection! this -1) nil)
 
-      (or (keys/matches-key? data "down") (keys/matches-key? data (keys/ctrl "n")))
-      (do (move-selection! this 1) nil)
+        (or (kb/matches-key kmgr data "tui.select.down")
+            (keys/matches-key? data (keys/ctrl "n")))
+        (do (move-selection! this 1) nil)
 
-      (keys/matches-key? data "pageUp")
-      (do (page-selection! this data) nil)
+        (kb/matches-key kmgr data "tui.select.pageUp")
+        (do (page-selection! this -1) nil)
 
-      (keys/matches-key? data "pageDown")
-      (do (page-selection! this data) nil)
+        (kb/matches-key kmgr data "tui.select.pageDown")
+        (do (page-selection! this 1) nil)
 
-      (keys/matches-key? data "escape")
-      (do (close! this) nil)
+        (kb/matches-key kmgr data "tui.select.cancel")
+        (do (close! this) nil)
 
-      (keys/matches-key? data "ctrl+c")
-      (do (close! this) nil)
+        ;; pi config-selector still matches ctrl+c raw (onExit), and space
+        ;; raw; everything else goes through the manager
+        (keys/matches-key? data "ctrl+c")
+        (do (close! this) nil)
 
-      (keys/matches-key? data "tab")
-      (do (when (:project-mode? this) (switch-scope! this)) nil)
+        (kb/matches-key kmgr data "tui.input.tab")
+        (do (when (:project-mode? this) (switch-scope! this)) nil)
 
-      (or (= data " ") (keys/matches-key? data "enter"))
-      (do (toggle-selected! this) nil)
+        (or (= data " ") (kb/matches-key kmgr data "tui.select.confirm"))
+        (do (toggle-selected! this) nil)
 
-      :else
-      (do (protocols/handle-input (:search-input this) data)
-          (refresh-filter! this)
-          nil))))
+        :else
+        (do (protocols/handle-input (:search-input this) data)
+            (refresh-filter! this)
+            nil)))))
 
 ;; ─── Construction & test helpers ──────────────────────────────────────────
 
