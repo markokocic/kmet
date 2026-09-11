@@ -353,39 +353,56 @@ bb help            # Show task help
 
 ## Building
 
-kmet ships as self-contained executables: an official babashka release binary
-with the kmet uberjar appended (babashka detects the appended zip at startup
-and runs `kmet.core/-main` — see babashka's "Self-contained executable" wiki
-page). Cross-builds work from any host because packaging is download + concat
-only.
+kmet ships as self-contained executables, packaged by the host-dispatched
+`dist` task: `bb dist` on babashka, `jolt dist` on jolt — same name, two
+packagers, artifacts side by side in `dist/`.
+
+On babashka the artifact is an official babashka release binary with the kmet
+uberjar appended (babashka detects the appended zip at startup and runs
+`kmet.core/-main` — see babashka's "Self-contained executable" wiki page).
+Cross-builds work from any host because packaging is download + concat only.
 
 ```sh
 bb uberjar              # Build target/kmet.jar (also runnable: bb target/kmet.jar)
-bb build                # Executable for the current platform -> dist/
-bb build --all          # Every published babashka platform
-bb build macos-aarch64  # Explicit targets; --force re-downloads, --no-smoke skips the post-build run
+bb dist                 # Executable for the current platform -> dist/
+bb dist --all           # Every published babashka platform
+bb dist macos-aarch64   # Explicit targets; --force re-downloads, --no-smoke skips the post-build run
 ```
 
-Targets mirror babashka's release assets: `linux-aarch64-static`,
+On jolt the same task AOT-compiles the app through
+`jolt build -m kmet.core` — runtime, stdlib, dependencies and kmet in one
+native binary, with the model catalogs embedded:
+
+```sh
+jolt dist               # Native binary for the current platform -> dist/
+jolt dist --dev         # Unoptimized build (--opt for optimized; release is the default)
+jolt dist --target tarm64le --target-pack /tmp/pack   # Cross-compile (tools/cross-compile)
+```
+
+Babashka targets mirror babashka's release assets: `linux-aarch64-static`,
 `linux-amd64`, `linux-amd64-static`, `macos-aarch64`, `macos-amd64`,
 `windows-amd64`. Babashka binaries are cached in `target/build-cache/`
 (sha256-verified on download); artifacts land in `dist/` as
 `kmet-<version>-bb<bb-version>-<slug>` (plus `.exe` on Windows).
-`bb build` always rebuilds a fresh `target/kmet.jar` first so artifacts
+`bb dist` always rebuilds a fresh `target/kmet.jar` first so artifacts
 never bundle stale sources. Downloads use `curl` (preinstalled on Termux,
-macOS, Linux and Windows 10+).
+macOS, Linux and Windows 10+). Jolt artifacts are
+`kmet-<version>-jolt<jolt-version>-<os>-<arch>[-dev]` (plus `.exe` on
+Windows); the compile happens under `target/jolt/`, and the freshly built
+binary is smoke-tested (`--list-models`) before it is announced.
 
 Versioning: the artifact version is the git tag pointing at HEAD (`v` prefix
 stripped), falling back to `<YYYYMMDD>-<short-hash>` from the HEAD commit
 date when no tag points at HEAD, then `dev` outside a repo.
 
-**Termux/Android**: the glibc babashka binary must be exec'd through Termux's
-glibc dynamic linker — which also disables babashka's own appended-jar auto-
-detection. Building on a termux host therefore additionally emits a companion
-`kmet-<version>-bb<bb-version>-<slug>.sh` launcher that unsets `LD_PRELOAD`, execs via
-`$PREFIX/glibc/lib/ld-linux-*.so.1`, and passes `--jar <self>` explicitly.
-It requires the termux glibc package (`pkg install glibc-repo && pkg install
-glibc`).
+**Termux/Android**: the glibc-linker problem applies to both hosts — a glibc
+binary must be exec'd through Termux's glibc dynamic linker, which also
+disables babashka's own appended-jar auto-detection. Building on a termux host
+therefore additionally emits a companion `.sh` launcher next to the artifact
+(e.g. `kmet-<version>-bb<bb-version>-<slug>.sh`) that unsets `LD_PRELOAD`, execs via
+`$PREFIX/glibc/lib/ld-linux-*.so.1` (plus `--jar <self>` for the babashka
+binary). It requires the termux glibc package (`pkg install glibc-repo && pkg
+install glibc`).
 
 ## Status
 

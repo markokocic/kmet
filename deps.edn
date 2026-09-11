@@ -1,5 +1,6 @@
 {:paths ["src"]
- ;; `jolt build` (driven by kmet.build-jolt / the `build-jolt` task) bakes
+ ;; `jolt build` (driven by kmet.build-jolt, the jolt branch of the `dist`
+ ;; task) bakes
  ;; every file under each :embed root into the binary, keyed by its path below
  ;; the root — so the model catalogs (io/resource "kmet/ai/model_data/…") are
  ;; embedded, not merely found next to the checkout. Without this the built

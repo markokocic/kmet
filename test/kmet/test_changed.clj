@@ -40,6 +40,11 @@
   (testing "changing a test namespace includes itself"
     (let [nss (set (changed/affected-test-nss-by '[kmet.tui.components.test-text]))]
       (is (contains? nss 'kmet.tui.components.test-text))))
+  (testing "a -test suffix counts too (kmet.build-test mirrors its src ns)"
+    (let [nss (set (changed/affected-test-nss-by '[kmet.build]))]
+      (is (contains? nss 'kmet.build-test)))
+    (let [nss (set (changed/affected-test-nss-by '[kmet.build-jolt]))]
+      (is (contains? nss 'kmet.build-jolt-test))))
   (testing "unrelated namespaces stay out"
     (let [nss (set (changed/affected-test-nss-by '[kmet.ai.models]))]
       (is (not (contains? nss 'kmet.tui.components.test-text)))))

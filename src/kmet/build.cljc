@@ -1,5 +1,6 @@
 (ns kmet.build
-  "Build self-contained kmet executables.
+  "Build self-contained kmet executables (the babashka host's half of the
+   `dist` task — `jolt dist` runs kmet.build-jolt instead).
    A binary is the official babashka release binary with target/kmet.jar (an
    uberjar of src + runtime deps) appended — babashka detects the appended zip
    at startup and runs the uberjar's -main (babashka wiki: Self-contained
@@ -15,8 +16,8 @@
    bb-only: packaging runs on babashka.classpath and java.util.zip, which the
    jolt host does not provide — the entry points (uberjar*, -main,
    pack-extension!) fail fast with ::bb-only under jolt, where the packager is
-   kmet.build-jolt (the `build-jolt` task: jolt AOT-compiles instead of
-   appending an uberjar), see jolt-port.md M5/M6."
+   kmet.build-jolt (jolt AOT-compiles instead of appending an uberjar), see
+   jolt-port.md M5/M6."
   (:require #?@(:bb [[babashka.classpath :as bcp]])
             [babashka.fs :as fs]
             [babashka.process :as p]
@@ -443,7 +444,8 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" --jar \"$BIN\" \"$@\"
       opts)))
 
 (defn -main
-  "bb build [target ...|--all] [--force] [--no-smoke]
+  "bb dist [target ...|--all] [--force] [--no-smoke]   (the bb.edn task's
+   babashka branch; the jolt branch runs kmet.build-jolt/-main)
 
    Build self-contained kmet executable(s) in dist/: the official babashka
    release binary with the kmet uberjar appended. Targets are release asset
@@ -454,7 +456,7 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" --jar \"$BIN\" \"$@\"
    memory on constrained devices). A fresh uberjar (target/kmet.jar) is
    always rebuilt first so artifacts never bundle stale sources."
   [& args]
-  (bb-only! "kmet.build/-main (bb build)")
+  (bb-only! "kmet.build/-main (the bb half of the dist task)")
   (let [{:keys [targets all? force? no-smoke? help?]} (parse-args args)]
     (when help?
       (println (:doc (meta #'-main)))

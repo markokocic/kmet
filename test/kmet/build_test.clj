@@ -1,8 +1,9 @@
 (ns kmet.build-test
   ;; Every test here exercises the bb-only packaging pipeline (kmet.build:
-  ;; uberjar/build/pack-extension over babashka.classpath + java.util.zip).
-  ;; All vars carry ^:bb-only — kmet.runner runs them under bb and skips
-  ;; them on the jolt host, whose packager is a separate rewrite (M5/M6).
+  ;; uberjar/pack-extension over babashka.classpath + java.util.zip — the bb
+  ;; branch of the `dist` task). All vars carry ^:bb-only — kmet.runner runs
+  ;; them under bb and skips them on the jolt host, whose packager is
+  ;; kmet.build-jolt (see kmet.build-jolt-test).
   (:require [babashka.fs :as fs]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is testing]]

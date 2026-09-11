@@ -1,8 +1,8 @@
 (ns kmet.build-jolt-test
-  ;; The jolt packager's pure surface (kmet.build-jolt): slug/naming rules and
-  ;; the CLI parser. The compile itself is jolt's CLI in a subprocess and is
-  ;; not unit-tested here; only the host's own artifact can smoke-test, which
-  ;; the packager does as part of the build.
+  ;; The jolt packager's pure surface (kmet.build-jolt, the jolt branch of the
+  ;; `dist` task): slug/naming rules and the CLI parser. The compile itself is
+  ;; jolt's CLI in a subprocess and is not unit-tested here; only the host's
+  ;; own artifact can smoke-test, which the packager does as part of the build.
   (:require [clojure.test :refer [deftest is testing]]
             [kmet.build-jolt :as jbuild]))
 
@@ -86,6 +86,18 @@
                         (jbuild/parse-args ["--target"])))
   (is (thrown-with-msg? Exception #"--target-pack needs"
                         (jbuild/parse-args ["--target-pack"]))))
+
+(deftest default-artifact-appends-exe-only-on-windows
+  (let [artifact #'jbuild/default-artifact]
+    (is (= "dist/kmet-1.2.3-jolt0.8.6-linux-amd64"
+           (str (artifact "1.2.3" "0.8.6" "linux-amd64" "release"))))
+    (is (= "dist/kmet-1.2.3-jolt0.8.6-windows-amd64.exe"
+           (str (artifact "1.2.3" "0.8.6" "windows-amd64" "release"))))
+    (testing "the dev tag sits before the suffix"
+      (is (= "dist/kmet-1.2.3-jolt0.8.6-linux-amd64-dev"
+             (str (artifact "1.2.3" "0.8.6" "linux-amd64" "dev"))))
+      (is (= "dist/kmet-1.2.3-jolt0.8.6-windows-amd64-dev.exe"
+             (str (artifact "1.2.3" "0.8.6" "windows-amd64" "dev")))))))
 
 (deftest build-argv-pins-the-entry-and-output
   (let [argv #'jbuild/build-argv]

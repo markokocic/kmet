@@ -168,8 +168,14 @@
       seen)))
 
 (defn- test-ns?
+  "True for a test namespace: the conventional test-* last segment, or the
+   -test suffix (kmet.build-test / kmet.build-jolt-test mirror their src
+   namespace, so the suffix is the only marker they carry — without it the
+   changed-file loop never selects them, even when they themselves changed)."
   [ns-sym]
-  (str/starts-with? (last (str/split (str ns-sym) #"\.")) "test-"))
+  (let [last-seg (last (str/split (str ns-sym) #"\."))]
+    (or (str/starts-with? last-seg "test-")
+        (str/ends-with? last-seg "-test"))))
 
 (defn affected-test-nss-by
   "Test namespaces affected by CHANGED-NSS: the changed ones plus every test

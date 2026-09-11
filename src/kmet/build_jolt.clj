@@ -1,12 +1,13 @@
 (ns kmet.build-jolt
-  "Build the self-contained kmet executable for the jolt host — the jolt
-   counterpart of kmet.build's babashka pipeline (`bb build`).
+  "Build the self-contained kmet executable for the jolt host — the jolt half
+   of the `dist` task (bb.edn branches on *jolt-version*: `jolt dist` lands
+   here, `bb dist` lands in kmet.build).
 
-   bb build downloads the official babashka binary and appends target/kmet.jar;
-   this packager instead drives jolt's own AOT build, which links the runtime,
-   clojure.core, the stdlib, every dependency and the app into one native
-   executable. There is no jar step and nothing to download here — the compile
-   is the whole build — so the packager owns what the CLI does not:
+   Where the babashka packager downloads the official babashka binary and
+   appends target/kmet.jar, this one drives jolt's own AOT build, which links
+   the runtime, clojure.core, the stdlib, every dependency and the app into one
+   native executable. There is no jar step and nothing to download here — the
+   compile is the whole build — so the packager owns what the CLI does not:
 
    - the version-stamped artifact name in dist/ (`kmet-<ver>-jolt<jv>-<slug>`,
      jolt in the slot kmet.build fills with bb<version>, so one dist/ carries
@@ -18,19 +19,18 @@
    - a Termux launcher, like the babashka packager's: a glibc-linked binary
      needs the glibc dynamic linker on Android.
 
-   The compile runs as a `jolt build` SUBPROCESS, and the task is named
-   `build-jolt` rather than `build`:
+   The compile runs as a `jolt build` SUBPROCESS, not in this process:
 
-   - jolt's built-in `build` command owns that name. A task called `build`
-     either loses to it (jolt warns about the shadowed task on every
-     `jolt build`) or, with :override-builtin true, displaces it — and then this
-     wrapper's own `jolt build` call re-enters the task forever. Keeping
-     `jolt build` the compiler command also keeps `jolt build -m NS --opt`
-     usable for one-off builds in this repo.
-   - compiling in this process (jolt.host/build-binary) would mean
-     reimplementing jolt.main's private build path — resolve-current,
-     encode-natives for the :jolt/native specs, the output-path rules — against
-     internal vars. The subprocess speaks the documented CLI instead."
+   - compiling in-process (jolt.host/build-binary) would mean reimplementing
+     jolt.main's private build path — resolve-current, encode-natives for the
+     :jolt/native specs, the output-path rules — against internal vars. The
+     subprocess speaks the documented CLI instead, which also leaves `jolt
+     build` itself the compiler command (`jolt build -m NS --opt` still works
+     for one-off builds in this repo).
+   - the task is `dist` on both hosts, never `build`: a task called `build`
+     either loses to jolt's built-in (jolt warns about the shadowed task on
+     every `jolt build`) or, with :override-builtin true, displaces it — and
+     then this wrapper's own `jolt build` call re-enters the task forever."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]
             [clojure.string :as str]
@@ -120,6 +120,14 @@
   [slug mode]
   (fs/path scratch-root (str slug) mode (if (windows-slug? slug) "kmet.exe" "kmet")))
 
+(defn- default-artifact
+  "The dist artifact path for a build: kmet-<ver>-jolt<jv>-<slug>[-dev][.exe].
+   An nt slug takes the suffix, the way jolt's own output path does — the file
+   has to be executable by name on Windows."
+  [ver jolt-ver slug mode]
+  (fs/path dist-dir (str (artifact-base ver jolt-ver slug {:dev? (= mode "dev")})
+                         (when (windows-slug? slug) ".exe"))))
+
 ;; ─── CLI ──────────────────────────────────────────────────────────────────
 
 (defn- opt-value
@@ -134,8 +142,9 @@
 
 (defn parse-args
   "CLI args -> options map. Unknown options and bare arguments throw ex-info
-   with :type ::usage — unlike `bb build` there are no positional targets,
-   because a jolt cross build needs a target pack rather than a download."
+   with :type ::usage — unlike the babashka packager there are no positional
+   targets, because a jolt cross build needs a target pack rather than a
+   download."
   [args]
   (loop [args args
          opts {:mode "release" :flags [] :boot nil :target nil :target-pack nil
@@ -203,11 +212,12 @@
 (defn- assemble!
   "Copy the compiled binary out of the scratch dir to its dist artifact,
    keeping the scratch for the next incremental build. Returns the artifact
-   path."
-  [bin artifact]
+   path. SLUG decides the executable bit: a windows artifact keeps whatever
+   the filesystem does with it (setting POSIX permissions there fails)."
+  [bin artifact slug]
   (fs/create-dirs (fs/parent artifact))
   (fs/copy bin artifact {:replace-existing true})
-  (when-not (windows-slug? (fs/file-name artifact))
+  (when-not (windows-slug? slug)
     (fs/set-posix-file-permissions artifact "rwxr-xr-x"))
   artifact)
 
@@ -286,13 +296,14 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" \"$@\"
 ;; ─── entry point ──────────────────────────────────────────────────────────
 
 (defn -main
-  "jolt build-jolt [options]
+  "jolt dist [options]   (the bb.edn task's jolt branch; the babashka branch
+   runs kmet.build/-main)
 
    Build the self-contained kmet executable for the jolt host into dist/ —
-   the jolt counterpart of `bb build`. jolt AOT-compiles the app (runtime,
-   clojure.core, stdlib, deps and kmet.core in one native binary); this task
-   wraps that compile with the artifact naming, the scratch dir and a smoke
-   test. `jolt build` itself stays jolt's compiler command.
+   the jolt counterpart of the babashka packager. jolt AOT-compiles the app
+   (runtime, clojure.core, stdlib, deps and kmet.core in one native binary);
+   this task wraps that compile with the artifact naming, the scratch dir and
+   a smoke test. `jolt build` itself stays jolt's compiler command.
 
    Options:
      --dev | --opt            build mode (default: release)
@@ -323,8 +334,7 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" \"$@\"
           bin (scratch-bin slug mode)
           artifact (if out
                      (fs/absolutize out)
-                     (fs/absolutize (fs/path dist-dir (artifact-base ver jver slug
-                                                                     {:dev? (= mode "dev")}))))]
+                     (fs/absolutize (default-artifact ver jver slug mode)))]
       (when (= :unknown-platform slug)
         (throw (ex-info "cannot determine host platform; cross builds need --target MACHINE --target-pack DIR"
                         {:type ::usage :reason slug})))
@@ -341,7 +351,7 @@ exec \"$LD\" --library-path \"$PREFIX/glibc/lib\" \"$BIN\" \"$@\"
       (when-not (fs/exists? bin)
         (throw (ex-info (str "jolt build reported success but " bin " is missing")
                         {:type ::no-binary :path (str bin)})))
-      (assemble! bin artifact)
+      (assemble! bin artifact slug)
       (when-let [launcher (write-launcher! artifact slug)]
         (println "launcher:" (str launcher)))
       (smoke-test! artifact slug {:no-smoke? no-smoke?})
