@@ -67,6 +67,7 @@
     kmet.test-theme kmet.test-config
     kmet.test-http-boundary
     kmet.build-test
+    kmet.build-jolt-test
     kmet.app.test-skills
 
     kmet.app.test-prompts

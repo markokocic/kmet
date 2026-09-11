@@ -14,8 +14,9 @@
 
    bb-only: packaging runs on babashka.classpath and java.util.zip, which the
    jolt host does not provide — the entry points (uberjar*, -main,
-   pack-extension!) fail fast with ::bb-only under jolt, and the jolt build
-   packager is separate (jolt-port.md M5/M6)."
+   pack-extension!) fail fast with ::bb-only under jolt, where the packager is
+   kmet.build-jolt (the `build-jolt` task: jolt AOT-compiles instead of
+   appending an uberjar), see jolt-port.md M5/M6."
   (:require #?@(:bb [[babashka.classpath :as bcp]])
             [babashka.fs :as fs]
             [babashka.process :as p]
@@ -247,13 +248,15 @@
                                "Main-Class: " main-class "\r\n\r\n")) zos)
       (.closeEntry zos)
       (doseq [p (sort-by str (fs/glob "src" "**.{clj,cljc,edn}"))]
-        ;; the builder itself isn't runtime code — keep it out of artifacts
+        ;; the packagers themselves aren't runtime code — keep them out of
+        ;; artifacts (kmet/build.clj is this pipeline, kmet/build_jolt.clj the
+        ;; jolt one; nothing else under src/kmet/ is named build*)
         (let [rel (str (fs/relativize "src" p))
               ;; jar entries must use / separators — fs/relativize yields \ on
               ;; Windows, which breaks bb's classpath lookup (kmet/core.clj
               ;; would not resolve from the appended jar)
               entry (str/replace rel "\\" "/")]
-          (when-not (= "kmet/build.clj" entry)
+          (when-not (str/starts-with? entry "kmet/build")
             (.putNextEntry zos (java.util.zip.ZipEntry. entry))
             (with-open [in (io/input-stream (fs/file p))]
               (io/copy in zos))
