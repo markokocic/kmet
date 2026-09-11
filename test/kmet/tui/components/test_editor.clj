@@ -1124,4 +1124,24 @@
         (core/handle-input e (ctrl 16))
         (t/is (= 1 @cycled))))))
 
+(t/deftest test-editor-interrupt-and-exit-beat-history-bindings
+  (t/testing "pi custom-editor order: app.interrupt/app.exit are checked
+              before the history bindings, so binding history to escape
+              cannot swallow cancel"
+    (let [kmgr (app-kb/make-agent-keybindings-manager
+                {"tui.editor.historyPrevious" "escape"
+                 "tui.editor.historyNext" "ctrl+d"})
+          e (editor/make-editor :keybindings kmgr)
+          interrupted (atom 0)
+          exited (atom 0)]
+      (editor/editor-set-on-action! e "app.interrupt" (fn [] (swap! interrupted inc)))
+      (editor/editor-set-on-action! e "app.exit" (fn [] (swap! exited inc)))
+      (editor/editor-push-history! e "old prompt")
+      (core/handle-input e K-ESC)
+      (t/is (= 1 @interrupted) "escape interrupted instead of browsing history")
+      (t/is (= "" (editor/editor-get-text e)) "history did not load")
+      (core/handle-input e (ctrl 4))
+      (t/is (= 1 @exited) "ctrl+d exited the empty editor instead of history"))))
+
+
 

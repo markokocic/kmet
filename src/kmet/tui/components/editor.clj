@@ -1294,11 +1294,21 @@
                     (apply-selected-completion! this))
                   nil)))
 
+          ;; pi (custom-editor) order: interrupt and exit are tried BEFORE the
+          ;; explicit history bindings, so a user binding history to escape/
+          ;; ctrl+d cannot swallow cancel/exit. `and` short-circuits: when
+          ;; neither id matches, dispatch-app-action! is not called here and
+          ;; the general leg below runs the remaining actions exactly once.
+          (and (or (kb-match? this data "app.interrupt")
+                   (kb-match? this data "app.exit"))
+               (dispatch-app-action! this data))
+          nil
+
           ;; pi (custom-editor): explicit history bindings take precedence
-          ;; over app actions while the editor is focused — the escape hatch
-          ;; that lets a user bind ctrl+p to history even though it cycles
-          ;; models by default. Both default to no keys, so this only fires
-          ;; for user-bound chords.
+          ;; over the remaining app actions while the editor is focused —
+          ;; the escape hatch that lets a user bind ctrl+p to history even
+          ;; though it cycles models by default. Both default to no keys, so
+          ;; this only fires for user-bound chords.
           (kb-match? this data "tui.editor.historyPrevious")
           (do (history-backward this) nil)
 

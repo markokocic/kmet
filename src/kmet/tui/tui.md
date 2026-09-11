@@ -705,9 +705,10 @@ sees). Consequences:
   `tui.editor.*` through the global KeybindingsManager — the editor prefers
   an injected one, like pi's `CustomEditor` — so a user override in
   `keybindings.edn` moves the widget itself, not just the hint that reads
-  the same table. The editor checks `tui.editor.historyPrevious/Next` before
-  app actions (pi: custom-editor), so a user can bind ctrl+p to history even
-  though it cycles models by default. Chords beyond pi's table stay raw
+  the same table. The editor checks `tui.editor.historyPrevious/Next` after
+  interrupt/exit but before the other app actions (pi: custom-editor), so a
+  user can bind ctrl+p to history even though it cycles models by default,
+  while escape/ctrl+d still cancel/exit. Chords beyond pi's table stay raw
   extras: `ctrl+h` (Input/editor backspace), `ctrl+n`/`ctrl+p`
   (SelectList/SettingsList/editor navigation), the editor's `ctrl+z` redo
   and `ctrl+w` kill-line, and SelectList's typed filtering.
@@ -1010,7 +1011,7 @@ rendering-shaped ones are postponed below.
 | R2 | writable cursor | `kmet.libs.reakt/writable-cursor` + `cursor-reset!`/`cursor-swap!` (§3.1): a tracked-read lens that writes back through its source with `assoc-in`, `=`-gated, nested lenses composing, inert once disposed; read-only `cursor` stays the derivation primitive |
 | P1 | skill invocation message | `kmet.app.skills/parse-skill-block` (the inverse of the expander) + `kmet.app.ui.skill-message` — a `/skill:name` block renders as a collapsible `[skill] name (ctrl+o to expand)` message instead of dumping its body into the transcript |
 | P2 | images in chat (TUI half) | `kmet.app.ui.image_block` + the live `ui.subs/image-settings-sub`: tool-result and user/custom-message images render inline, or as the `imageFallback` text indicator when `:show-images` is off / the terminal lacks support; `:terminal {:show-images :image-width-cells}` in `config.clj` + terminal-support-gated `/settings` rows. The wire half landed separately: `images.blockImages` = `app/loop.clj` (`convertToLlmWithBlockImages`) + an ungated `/settings` row; `images.autoResize` stays provider work (tracked in `alignment.md` §2) |
-| P3 | widget keys through the manager | `kmet.tui.keybindings/global-match?` + the editor's injected-manager `kb-match?` (§7): SelectList, Input, SettingsList and the editor resolve their own ids through the KeybindingsManager, so a user override moves the widget; the editor resolves `tui.editor.historyPrevious/Next` before app actions (pi: custom-editor precedence). The TUI definition table was aligned to pi's `TUI_KEYBINDINGS` (`historyPrevious/Next`, `jumpForward/Backward`, `yankPop`, `ctrl+left/right`, `ctrl+home/end`, `ctrl+pageUp/Down`) |
+| P3 | widget keys through the manager | `kmet.tui.keybindings/global-match?` + the editor's injected-manager `kb-match?` (§7): SelectList, Input, SettingsList and the editor resolve their own ids through the KeybindingsManager, so a user override moves the widget; the editor resolves `tui.editor.historyPrevious/Next` between interrupt/exit and the other app actions (pi: custom-editor order). The TUI definition table was aligned to pi's `TUI_KEYBINDINGS` (`historyPrevious/Next`, `jumpForward/Backward`, `yankPop`, `ctrl+left/right`, `ctrl+home/end`, `ctrl+pageUp/Down`) |
 
 ### Plan
 

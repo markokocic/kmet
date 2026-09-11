@@ -229,10 +229,11 @@ Full extension API surface (pi `core/extensions/types.ts`) — one remaining gap
   `getKeybindings()` for `tui.select.*`/`tui.input.*`/`tui.editor.*` — **done**
   (`tui.md` §14 P3, §7): SelectList, Input, SettingsList and the editor resolve
   their ids through the manager (the editor prefers an injected one), the
-  editor's `tui.editor.historyPrevious/Next` are checked before app actions
-  (pi: custom-editor), and the TUI definition table was aligned to pi's
-  `TUI_KEYBINDINGS` (`historyPrevious/Next`, `jumpForward/Backward`, `yankPop`,
-  `ctrl+left/right`, `ctrl+home/end`, `ctrl+pageUp/Down`)
+  editor's `tui.editor.historyPrevious/Next` sit between interrupt/exit and the
+  remaining app actions (pi: custom-editor), and the TUI definition table was
+  aligned to pi's `TUI_KEYBINDINGS` (`historyPrevious/Next`,
+  `jumpForward/Backward`, `yankPop`, `ctrl+left/right`, `ctrl+home/end`,
+  `ctrl+pageUp/Down`)
 - **`/settings` menu breadth** — kmet `/settings` covers thinking/hide-thinking/retry only;
   **done (theme)**: a theme row (name switch + persist) was added; **done (images)**: the
   Show images / Image width rows (pi: show-images-selector, gated on terminal image
