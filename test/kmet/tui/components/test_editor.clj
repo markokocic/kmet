@@ -1086,3 +1086,42 @@
     ;; a second Enter submits the completed line
     (core/handle-input e K-ENTER)
     (t/is (= (editor/editor-get-text e) @submitted))))
+
+(t/deftest test-editor-keys-resolve-through-the-manager
+  (t/testing "P3: editor-internal keys go through the injected manager — a
+              user override replaces the default chord"
+    (let [kmgr (app-kb/make-agent-keybindings-manager {"tui.input.submit" "ctrl+y"})
+          e (editor/make-editor :keybindings kmgr)
+          submitted (atom nil)]
+      (editor/editor-set-on-submit! e (fn [v] (reset! submitted v)))
+      (doseq [c "hi"] (core/handle-input e (str c)))
+      (core/handle-input e K-ENTER)
+      (t/is (nil? @submitted) "enter was rebound away from submit")
+      (core/handle-input e (ctrl 25))
+      (t/is (= "hi" @submitted) "ctrl+y submits"))))
+
+(t/deftest test-editor-history-binding-beats-app-action
+  (t/testing "pi custom-editor: explicit history bindings take precedence over
+              app actions — a user can bind ctrl+p even though it cycles models
+              by default"
+    (let [kmgr (app-kb/make-agent-keybindings-manager
+                {"tui.editor.historyPrevious" "ctrl+p"})
+          e (editor/make-editor :keybindings kmgr)
+          cycled (atom 0)]
+      (editor/editor-set-on-action! e "app.model.cycleForward"
+                                    (fn [] (swap! cycled inc)))
+      (editor/editor-push-history! e "old prompt")
+      (doseq [c "draft"] (core/handle-input e (str c)))
+      (core/handle-input e (ctrl 16))
+      (t/is (zero? @cycled) "the history binding consumed the key")
+      (t/is (= "old prompt" (editor/editor-get-text e)) "history navigated"))
+    (t/testing "unbound history ids leave the chord to app actions"
+      (let [kmgr (app-kb/make-agent-keybindings-manager)
+            e (editor/make-editor :keybindings kmgr)
+            cycled (atom 0)]
+        (editor/editor-set-on-action! e "app.model.cycleForward"
+                                      (fn [] (swap! cycled inc)))
+        (core/handle-input e (ctrl 16))
+        (t/is (= 1 @cycled))))))
+
+

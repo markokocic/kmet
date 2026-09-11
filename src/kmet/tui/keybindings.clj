@@ -11,14 +11,18 @@
 (def tui-keybinding-defs
   {"tui.editor.cursorUp"           {:default-keys ["up"]                :description "Move cursor up"}
    "tui.editor.cursorDown"         {:default-keys ["down"]              :description "Move cursor down"}
+   "tui.editor.historyPrevious"    {:default-keys []                    :description "Select previous prompt history entry"}
+   "tui.editor.historyNext"        {:default-keys []                    :description "Select next prompt history entry"}
    "tui.editor.cursorLeft"         {:default-keys ["left" "ctrl+b"]     :description "Move cursor left"}
    "tui.editor.cursorRight"        {:default-keys ["right" "ctrl+f"]    :description "Move cursor right"}
-   "tui.editor.cursorWordLeft"     {:default-keys ["alt+left" "alt+b"]  :description "Move cursor word left"}
-   "tui.editor.cursorWordRight"    {:default-keys ["alt+right" "alt+f"] :description "Move cursor word right"}
-   "tui.editor.cursorLineStart"    {:default-keys ["home" "ctrl+a"]     :description "Move to line start"}
-   "tui.editor.cursorLineEnd"      {:default-keys ["end" "ctrl+e"]      :description "Move to line end"}
-   "tui.editor.pageUp"             {:default-keys ["pageUp"]            :description "Page up"}
-   "tui.editor.pageDown"           {:default-keys ["pageDown"]          :description "Page down"}
+   "tui.editor.cursorWordLeft"     {:default-keys ["alt+left" "ctrl+left" "alt+b"]  :description "Move cursor word left"}
+   "tui.editor.cursorWordRight"    {:default-keys ["alt+right" "ctrl+right" "alt+f"] :description "Move cursor word right"}
+   "tui.editor.cursorLineStart"    {:default-keys ["home" "ctrl+home" "ctrl+a"]     :description "Move to line start"}
+   "tui.editor.cursorLineEnd"      {:default-keys ["end" "ctrl+end" "ctrl+e"]      :description "Move to line end"}
+   "tui.editor.jumpForward"        {:default-keys ["ctrl+]"]            :description "Jump forward to character"}
+   "tui.editor.jumpBackward"       {:default-keys ["ctrl+alt+]"]        :description "Jump backward to character"}
+   "tui.editor.pageUp"             {:default-keys ["pageUp" "ctrl+pageUp"]  :description "Page up"}
+   "tui.editor.pageDown"           {:default-keys ["pageDown" "ctrl+pageDown"] :description "Page down"}
    "tui.editor.deleteCharBackward" {:default-keys ["backspace"]         :description "Delete char backward"}
    "tui.editor.deleteCharForward"  {:default-keys ["delete" "ctrl+d"]   :description "Delete char forward"}
    "tui.editor.deleteWordBackward" {:default-keys ["ctrl+w" "alt+backspace"] :description "Delete word backward"}
@@ -26,6 +30,7 @@
    "tui.editor.deleteToLineStart"  {:default-keys ["ctrl+u"]            :description "Delete to line start"}
    "tui.editor.deleteToLineEnd"    {:default-keys ["ctrl+k"]            :description "Delete to line end"}
    "tui.editor.yank"               {:default-keys ["ctrl+y"]            :description "Yank"}
+   "tui.editor.yankPop"            {:default-keys ["alt+y"]             :description "Yank pop"}
    "tui.editor.undo"               {:default-keys ["ctrl+-"]            :description "Undo"}
    "tui.input.newLine"             {:default-keys ["shift+enter" "ctrl+j"] :description "Insert newline"}
    "tui.input.submit"             {:default-keys ["enter"]              :description "Submit input"}
@@ -177,6 +182,14 @@
       (let [default (make-tui-keybindings-manager)]
         (reset! global-kmgr default)
         default)))
+
+(defn global-match?
+  "Does raw input DATA match keybinding ID in the global manager (pi:
+   getKeybindings().matches)? Generic widgets resolve their own keys through
+   this so user overrides (keybindings.edn) apply to them; widgets taking an
+   injected manager (the editor) resolve through that one instead."
+  [data keybinding-id]
+  (matches-key (get-global-keybindings) data keybinding-id))
 
 ;; ─── Key hint formatting ──────────────────────────────────────────────────
 ;; These produce ANSI-styled strings for display in tool outputs.

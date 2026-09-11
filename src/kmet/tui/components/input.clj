@@ -5,8 +5,17 @@
             [kmet.tui.macros :refer [defcomponent]]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
+            [kmet.tui.keybindings :as kb]
             [kmet.tui.utils :as u]
             [kmet.tui.components.editing :as edit]))
+
+;; ─── Key dispatch ─────────────────────────────────────────────────────────
+
+(defn- match?
+  "Resolve DATA against keybinding ID through the global manager (pi:
+   getKeybindings().matches) so user overrides apply to the input's keys."
+  [data keybinding-id]
+  (kb/global-match? data keybinding-id))
 
 ;; ─── Grapheme helpers and kill ring ──────────────────────────────────────
 ;; Imported from kmet.tui.components.editing
@@ -249,12 +258,11 @@
             nil)
 
         ;; Escape / Cancel
-        (or (keys/matches-key? data "escape")
-            (keys/matches-key? data (keys/ctrl "c")))
+        (match? data "tui.select.cancel")
         (do (when-let [cb @on-escape] (cb)) nil)
 
         ;; Undo
-        (keys/matches-key? data (keys/ctrl "-"))
+        (match? data "tui.editor.undo")
         (do (when-let [snapshot (undo-pop undo-stack)]
               (reset! value-atom (:value snapshot))
               (reset! cursor-atom (:cursor snapshot))
@@ -262,85 +270,74 @@
             nil)
 
         ;; Submit
-        (keys/matches-key? data "enter")
+        (match? data "tui.input.submit")
         (do (when-let [cb @on-submit] (cb @value-atom)) nil)
 
         ;; Backspace
-        (or (keys/matches-key? data "backspace")
+        (or (match? data "tui.editor.deleteCharBackward")
             (keys/matches-key? data (keys/ctrl "h")))
         (do (handle-backspace this) nil)
 
         ;; Forward delete
-        (or (keys/matches-key? data "delete")
-            (keys/matches-key? data (keys/ctrl "d")))
+        (match? data "tui.editor.deleteCharForward")
         (do (handle-forward-delete this) nil)
 
         ;; Delete word backward
-        (or (keys/matches-key? data (keys/ctrl "w"))
-            (keys/matches-key? data (keys/alt "backspace")))
+        (match? data "tui.editor.deleteWordBackward")
         (do (delete-word-backwards this) nil)
 
         ;; Delete word forward
-        (or (keys/matches-key? data (keys/alt "d"))
-            (keys/matches-key? data (keys/alt "delete")))
+        (match? data "tui.editor.deleteWordForward")
         (do (delete-word-forward this) nil)
 
         ;; Delete to line start
-        (keys/matches-key? data (keys/ctrl "u"))
+        (match? data "tui.editor.deleteToLineStart")
         (do (delete-to-line-start this) nil)
 
         ;; Delete to line end
-        (keys/matches-key? data (keys/ctrl "k"))
+        (match? data "tui.editor.deleteToLineEnd")
         (do (delete-to-line-end this) nil)
 
         ;; Yank
-        (keys/matches-key? data (keys/ctrl "y"))
+        (match? data "tui.editor.yank")
         (do (yank-action this) nil)
 
         ;; Yank pop
-        (keys/matches-key? data (keys/alt "y"))
+        (match? data "tui.editor.yankPop")
         (do (yank-pop-action this) nil)
 
         ;; Cursor left
-        (or (keys/matches-key? data "left")
-            (keys/matches-key? data (keys/ctrl "b")))
+        (match? data "tui.editor.cursorLeft")
         (do (reset! last-action nil)
             (reset! cursor-atom (edit/grapheme-left value cursor))
             nil)
 
         ;; Cursor right
-        (or (keys/matches-key? data "right")
-            (keys/matches-key? data (keys/ctrl "f")))
+        (match? data "tui.editor.cursorRight")
         (do (reset! last-action nil)
             (reset! cursor-atom (edit/grapheme-right value cursor))
             nil)
 
         ;; Cursor line start
-        (or (keys/matches-key? data "home")
-            (keys/matches-key? data (keys/ctrl "a")))
+        (match? data "tui.editor.cursorLineStart")
         (do (reset! last-action nil)
             (reset! cursor-atom 0)
             nil)
 
         ;; Cursor line end
-        (or (keys/matches-key? data "end")
-            (keys/matches-key? data (keys/ctrl "e")))
+        (match? data "tui.editor.cursorLineEnd")
         (do (reset! last-action nil)
             (reset! cursor-atom (count @value-atom))
             nil)
 
         ;; Cursor word left
-        (or (keys/matches-key? data (keys/alt "left"))
-            (keys/matches-key? data (keys/ctrl "left"))
-            (keys/matches-key? data (keys/alt "b")))
+        (match? data "tui.editor.cursorWordLeft")
         (do (reset! last-action nil)
             (reset! cursor-atom (edit/word-boundary-left @value-atom @cursor-atom))
             nil)
 
         ;; Cursor word right
-        (or (keys/matches-key? data (keys/alt "right"))
-            (keys/matches-key? data (keys/ctrl "right"))
-            (keys/matches-key? data (keys/alt "f")))
+        (match? data "tui.editor.cursorWordRight")
         (do (reset! last-action nil)
             (reset! cursor-atom (edit/word-boundary-right @value-atom @cursor-atom))
             nil)

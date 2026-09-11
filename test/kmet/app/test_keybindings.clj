@@ -143,13 +143,13 @@
       (try
         (t/is (= ["up"] (tui-kb/get-keys kmgr "tui.editor.cursorUp")))
         (t/is (= "↑" (tui-kb/key-label-text kmgr "tui.editor.cursorUp")))
-        (t/is (= "pageUp" (tui-kb/key-text kmgr "tui.editor.pageUp"))
+        (t/is (= "pageUp/ctrl+pageUp" (tui-kb/key-text kmgr "tui.editor.pageUp"))
               "key-text stays the raw machine form")
-        (t/is (= "pgup" (tui-kb/key-label-text kmgr "tui.editor.pageUp"))
+        (t/is (= "pgup/ctrl+pgup" (tui-kb/key-label-text kmgr "tui.editor.pageUp"))
               "…while key-label-text is the display form")
         (t/testing "multi-chord ids join their labels"
-          (t/is (= "alt+left/alt+b" (tui-kb/key-text kmgr "tui.editor.cursorWordLeft")))
-          (t/is (= "alt+←/alt+b" (tui-kb/key-label-text kmgr "tui.editor.cursorWordLeft"))
+          (t/is (= "alt+left/ctrl+left/alt+b" (tui-kb/key-text kmgr "tui.editor.cursorWordLeft")))
+          (t/is (= "alt+←/ctrl+←/alt+b" (tui-kb/key-label-text kmgr "tui.editor.cursorWordLeft"))
                 "only the arrow part is relabelled"))
         (t/is (nil? (tui-kb/key-label-text kmgr "app.not.a.binding")))
         (finally (cleanup dir)))))

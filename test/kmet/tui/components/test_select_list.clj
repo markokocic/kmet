@@ -3,6 +3,7 @@
             [clojure.test :as t]
             [kmet.tui.core :as core]
             [kmet.tui.utils :as u]
+            [kmet.tui.keybindings :as kb]
             [kmet.tui.components.select-list :as sl]))
 
 (def ^:const K-DOWN "\u001b[B")
@@ -380,3 +381,27 @@
   (let [s (sl/make-select-list sample-items :header "Tree")]
     (sl/select-list-set-header! s "Tree [user]")
     (t/is (= "Tree [user]" @(:header-atom s)))))
+
+(t/deftest test-select-list-keys-resolve-through-the-manager
+  (t/testing "P3: the list's keys go through the manager — a user override
+              replaces the default chord"
+    (let [prev (kb/get-global-keybindings)
+          selected (atom nil)]
+      (try
+        (kb/set-global-keybindings!
+         (kb/make-keybindings-manager kb/tui-keybinding-defs
+                                      {"tui.select.confirm" "ctrl+y"
+                                       "tui.select.up" "ctrl+u"}))
+        (let [s (sl/make-select-list sample-items
+                                     :on-select (fn [item] (reset! selected (:value item))))]
+          (core/handle-input s K-ENTER)
+          (t/is (nil? @selected) "enter was rebound away from confirm")
+          (core/handle-input s "\u0019")
+          (t/is (= :apple @selected) "ctrl+y selects")
+          (core/handle-input s K-UP)
+          (t/is (zero? @(:selected-idx-atom s)) "up was rebound away from select-up")
+          (core/handle-input s "\u0015")
+          (t/is (= 3 @(:selected-idx-atom s)) "ctrl+u wraps to the bottom"))
+        (finally
+          (kb/set-global-keybindings! prev))))))
+

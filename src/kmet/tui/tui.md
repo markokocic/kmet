@@ -700,6 +700,17 @@ sees). Consequences:
 - Key names come from `kmet.tui.keys` (`keys/KEY-UP`, `(keys/ctrl "p")`,
   …); `kmet.tui.keybindings` maps binding IDs to resolved chords with user
   overrides and conflict detection.
+- **Widgets resolve their own keys through the manager** (P3): SelectList,
+  Input, SettingsList and the editor match `tui.select.*` / `tui.input.*` /
+  `tui.editor.*` through the global KeybindingsManager — the editor prefers
+  an injected one, like pi's `CustomEditor` — so a user override in
+  `keybindings.edn` moves the widget itself, not just the hint that reads
+  the same table. The editor checks `tui.editor.historyPrevious/Next` before
+  app actions (pi: custom-editor), so a user can bind ctrl+p to history even
+  though it cycles models by default. Chords beyond pi's table stay raw
+  extras: `ctrl+h` (Input/editor backspace), `ctrl+n`/`ctrl+p`
+  (SelectList/SettingsList/editor navigation), the editor's `ctrl+z` redo
+  and `ctrl+w` kill-line, and SelectList's typed filtering.
 - Widgets implement `handle-input`; dialogs trap keys manually around their
   focused editor.
 
@@ -974,9 +985,9 @@ relevant section, add it to the Done table and strike it from the plan; a
 declined item moves to "Deliberately not borrowing" with its rationale.
 
 Sources: the R items are ideas borrowed from glimmer (R1–R6 landed, R3b
-and R7 declined 2026-09-11); the P items are pi parity (P1, P2 landed, P3
-planned). The remaining kmet↔pi gaps are tracked in `alignment.md` (§2,
-§6), and the rendering-shaped ones are postponed below.
+and R7 declined 2026-09-11); the P items are pi parity (P1–P3 landed). The
+remaining kmet↔pi gaps are tracked in `alignment.md` (§2, §6), and the
+rendering-shaped ones are postponed below.
 
 - **R items — ideas borrowed from [glimmer](https://github.com/jolt-lang/glimmer)**
   (a reactive core + reagent-style component model targeting Jolt) and
@@ -999,17 +1010,14 @@ planned). The remaining kmet↔pi gaps are tracked in `alignment.md` (§2,
 | R2 | writable cursor | `kmet.libs.reakt/writable-cursor` + `cursor-reset!`/`cursor-swap!` (§3.1): a tracked-read lens that writes back through its source with `assoc-in`, `=`-gated, nested lenses composing, inert once disposed; read-only `cursor` stays the derivation primitive |
 | P1 | skill invocation message | `kmet.app.skills/parse-skill-block` (the inverse of the expander) + `kmet.app.ui.skill-message` — a `/skill:name` block renders as a collapsible `[skill] name (ctrl+o to expand)` message instead of dumping its body into the transcript |
 | P2 | images in chat (TUI half) | `kmet.app.ui.image_block` + the live `ui.subs/image-settings-sub`: tool-result and user/custom-message images render inline, or as the `imageFallback` text indicator when `:show-images` is off / the terminal lacks support; `:terminal {:show-images :image-width-cells}` in `config.clj` + terminal-support-gated `/settings` rows. The wire half landed separately: `images.blockImages` = `app/loop.clj` (`convertToLlmWithBlockImages`) + an ungated `/settings` row; `images.autoResize` stays provider work (tracked in `alignment.md` §2) |
+| P3 | widget keys through the manager | `kmet.tui.keybindings/global-match?` + the editor's injected-manager `kb-match?` (§7): SelectList, Input, SettingsList and the editor resolve their own ids through the KeybindingsManager, so a user override moves the widget; the editor resolves `tui.editor.historyPrevious/Next` before app actions (pi: custom-editor precedence). The TUI definition table was aligned to pi's `TUI_KEYBINDINGS` (`historyPrevious/Next`, `jumpForward/Backward`, `yankPop`, `ctrl+left/right`, `ctrl+home/end`, `ctrl+pageUp/Down`) |
 
 ### Plan
 
-| # | item | kmet pain point | lands in | size |
-|---|---|---|---|---|
-| P3 | widget keys resolve through the manager | pi's `select-list`/`input`/`settings-list`/editor resolve `tui.select.*`/`tui.input.*`/`tui.editor.*` through `getKeybindings()`; kmet's counterparts match raw chords, so a user rebind moves the hint (it reads the manager) and the app's selector panels but not the widget itself | `kmet.tui.components.*` | small |
-
-The two glimmer borrows that were pending here — R3b (focus-derived help
-line) and R7 (declarative `:overlay`) — were re-evaluated and declined
-2026-09-11; the analysis is recorded under "Deliberately not borrowing"
-so it is not redone.
+Nothing tracked. The two glimmer borrows that were pending here — R3b
+(focus-derived help line) and R7 (declarative `:overlay`) — were
+re-evaluated and declined 2026-09-11; the analysis is recorded under
+"Deliberately not borrowing" so it is not redone.
 
 ### Postponed indefinitely
 
@@ -1092,7 +1100,8 @@ Recorded so the analysis is not redone:
 
 ### Suggested order
 
-P3 first: small, and it is what keeps hints honest under user rebinds.
-Nothing else is tracked — the R3b extraction is opportunistic (only if a
-third dialog needs wrapped chunks) and R7 is declined.
+Nothing tracked. The R3b extraction stays opportunistic (only if a third
+dialog needs wrapped chunks); R7 is declined. The editor's still-raw chords
+(`ctrl+h`/`ctrl+z`/`ctrl+w`, the escape fallback) are extras pi does not
+bind, not a parity gap.
 

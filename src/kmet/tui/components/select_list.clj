@@ -6,8 +6,17 @@
   (:require [clojure.string :as str]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
+            [kmet.tui.keybindings :as kb]
             [kmet.tui.utils :as u]
             [kmet.tui.macros :refer [track! defcomponent]]))
+
+;; ─── Key dispatch ─────────────────────────────────────────────────────────
+
+(defn- match?
+  "Resolve DATA against keybinding ID through the global manager (pi:
+   getKeybindings().matches) so user overrides apply to the list's keys."
+  [data keybinding-id]
+  (kb/global-match? data keybinding-id))
 
 ;; ─── Default theme ──────────────────────────────────────────────────────────
 ;; Matches pi's SelectListTheme interface.
@@ -208,18 +217,18 @@
             selected @selected-idx-atom]
         (cond
         ;; Enter — select
-          (and (keys/matches-key? data "enter") (pos? n))
+          (and (match? data "tui.select.confirm") (pos? n))
           (do (when-let [cb @on-select]
                 (cb (nth filtered selected)))
               nil)
 
         ;; Escape — cancel
-          (keys/matches-key? data "escape")
+          (match? data "tui.select.cancel")
           (do (when-let [cb @on-escape] (cb))
               nil)
 
         ;; Down — pi wraps to the top at the bottom
-          (or (keys/matches-key? data "down")
+          (or (match? data "tui.select.down")
               (keys/matches-key? data (keys/ctrl "n")))
           (do (when (pos? n)
                 (if (= selected (dec n))
@@ -229,7 +238,7 @@
               nil)
 
         ;; Up — pi wraps to the bottom at the top
-          (or (keys/matches-key? data "up")
+          (or (match? data "tui.select.up")
               (keys/matches-key? data (keys/ctrl "p")))
           (do (when (pos? n)
                 (if (zero? selected)

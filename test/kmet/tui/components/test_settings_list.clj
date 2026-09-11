@@ -1,6 +1,7 @@
 (ns kmet.tui.components.test-settings-list
   (:require [clojure.test :as t]
             [kmet.tui.core :as core]
+            [kmet.tui.keybindings :as kb]
             [kmet.tui.components.settings-list :as sl]))
 
 ;; Raw key sequences
@@ -155,3 +156,22 @@
 
 (t/deftest test-settings-list-default-theme
   (t/is (some? sl/default-theme)))
+
+(t/deftest test-settings-list-keys-resolve-through-the-manager
+  (t/testing "P3: the list's keys go through the manager — a user override
+              replaces the default chord"
+    (let [prev (kb/get-global-keybindings)
+          changed (atom nil)]
+      (try
+        (kb/set-global-keybindings!
+         (kb/make-keybindings-manager kb/tui-keybinding-defs
+                                      {"tui.select.confirm" "ctrl+y"}))
+        (let [s (sl/make-settings-list sample-items
+                                       :on-change (fn [id v] (reset! changed [id v])))]
+          (core/handle-input s K-ENTER)
+          (t/is (nil? @changed) "enter was rebound away from confirm")
+          (core/handle-input s (str (char 25)))
+          (t/is (= [:theme "light"] @changed) "ctrl+y cycles the value"))
+        (finally
+          (kb/set-global-keybindings! prev))))))
+

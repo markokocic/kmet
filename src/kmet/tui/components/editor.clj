@@ -1048,6 +1048,19 @@
 ;; onExtensionShortcut) are checked BEFORE every app action, so extensions
 ;; can bind keys the app owns.
 
+(defn- keybindings-manager
+  "The manager this editor resolves bindings through: an injected one, else
+   the global singleton (pi: CustomEditor's KeybindingsManager)."
+  [editor]
+  (or @(:keybindings editor) (kb/get-global-keybindings)))
+
+(defn- kb-match?
+  "Does DATA match keybinding ID through this editor's manager (pi:
+   KeybindingsManager.matches)? Editor-internal keys and app actions both
+   resolve here, so user overrides apply to both."
+  [editor data keybinding-id]
+  (kb/matches-key (keybindings-manager editor) data keybinding-id))
+
 (defn- dispatch-priority-action!
   "Try to dispatch data to a priority action handler (extension shortcuts).
    Returns true if a handler matched and ran. Handlers are checked in
@@ -1055,7 +1068,7 @@
    run before builtin keybindings; between extensions, last registration
    wins per key, first registration wins per keypress)."
   [editor data]
-  (let [kmgr (or @(:keybindings editor) (kb/get-global-keybindings))
+  (let [kmgr (keybindings-manager editor)
         handlers @(:priority-action-handlers editor)]
     (loop [ids (keys handlers)]
       (if-let [action-id (first ids)]
@@ -1073,7 +1086,7 @@
      deletes the char forward)
    - all other registered actions are matched via the keybindings manager"
   [editor data]
-  (let [kmgr (or @(:keybindings editor) (kb/get-global-keybindings))
+  (let [kmgr (keybindings-manager editor)
         handlers @(:action-handlers editor)
         text (clojure.string/join "\n" (:lines @(:state-atom editor)))]
     (cond
@@ -1250,25 +1263,25 @@
           ;; Autocomplete dropdown — intercept only dropdown keys; other
           ;; input falls through to normal editing (which refreshes it)
           (and @(:autocomplete-state this) @(:autocomplete-list this)
-               (or (keys/matches-key? data "escape")
-                   (keys/matches-key? data "up") (keys/matches-key? data (keys/ctrl "p"))
-                   (keys/matches-key? data "down") (keys/matches-key? data (keys/ctrl "n"))
-                   (keys/matches-key? data "tab") (keys/matches-key? data (keys/ctrl "i"))
-                   (and (keys/matches-key? data "enter") (not @disable-submit))))
+               (or (kb-match? this data "tui.select.cancel")
+                   (kb-match? this data "tui.select.up") (keys/matches-key? data (keys/ctrl "p"))
+                   (kb-match? this data "tui.select.down") (keys/matches-key? data (keys/ctrl "n"))
+                   (kb-match? this data "tui.input.tab") (keys/matches-key? data (keys/ctrl "i"))
+                   (and (kb-match? this data "tui.select.confirm") (not @disable-submit))))
           (let [sl @(:autocomplete-list this)
                 prefix @(:autocomplete-prefix this)]
             (cond
-              (keys/matches-key? data "escape")
+              (kb-match? this data "tui.select.cancel")
               (do (cancel-autocomplete this) nil)
 
-              (or (keys/matches-key? data "up") (keys/matches-key? data (keys/ctrl "p"))
-                  (keys/matches-key? data "down") (keys/matches-key? data (keys/ctrl "n")))
+              (or (kb-match? this data "tui.select.up") (keys/matches-key? data (keys/ctrl "p"))
+                  (kb-match? this data "tui.select.down") (keys/matches-key? data (keys/ctrl "n")))
               (do (protocols/handle-input sl data) nil)
 
-              (or (keys/matches-key? data "tab") (keys/matches-key? data (keys/ctrl "i")))
+              (or (kb-match? this data "tui.input.tab") (keys/matches-key? data (keys/ctrl "i")))
               (do (apply-selected-completion! this) nil)
 
-              (and (keys/matches-key? data "enter") (not @disable-submit))
+              (and (kb-match? this data "tui.select.confirm") (not @disable-submit))
               ;; pi tui.select.confirm with the dropdown open: apply the
               ;; selected completion; only a command-name completion (prefix
               ;; starts with "/") falls through to submit — an argument
@@ -1281,6 +1294,17 @@
                     (apply-selected-completion! this))
                   nil)))
 
+          ;; pi (custom-editor): explicit history bindings take precedence
+          ;; over app actions while the editor is focused — the escape hatch
+          ;; that lets a user bind ctrl+p to history even though it cycles
+          ;; models by default. Both default to no keys, so this only fires
+          ;; for user-bound chords.
+          (kb-match? this data "tui.editor.historyPrevious")
+          (do (history-backward this) nil)
+
+          (kb-match? this data "tui.editor.historyNext")
+          (do (history-forward this) nil)
+
           ;; App actions (pi: CustomEditor.handleInput) — registered action
           ;; handlers take precedence over editor-internal key handling. Paste
           ;; buffering and the autocomplete dropdown are intercepted above, so
@@ -1288,13 +1312,12 @@
           (dispatch-app-action! this data)
           nil
 
-          (and (keys/matches-key? data "enter") (not @disable-submit))
+          (and (kb-match? this data "tui.input.submit") (not @disable-submit))
           (do (when-let [cb @on-submit] (cb (clojure.string/join "\n" lines))) nil)
 
-          (or (keys/matches-key? data (keys/shift "enter"))
+          (or (kb-match? this data "tui.input.newLine")
               (keys/matches-key? data (keys/ctrl "enter"))
-              (keys/matches-key? data (keys/alt "enter"))
-              (keys/matches-key? data (keys/ctrl "j")))
+              (keys/matches-key? data (keys/alt "enter")))
           (do (add-new-line this) nil)
 
           (keys/matches-key? data "escape")
@@ -1302,54 +1325,56 @@
               (when-let [cb @on-submit] (cb nil))
               nil)
 
-          (or (keys/matches-key? data "backspace")
+          (or (kb-match? this data "tui.editor.deleteCharBackward")
               (keys/matches-key? data (keys/ctrl "h")))
           (do (handle-backspace this) nil)
 
-          (or (keys/matches-key? data "delete")
-              (keys/matches-key? data (keys/ctrl "d")))
+          (kb-match? this data "tui.editor.deleteCharForward")
           (do (handle-forward-delete this) nil)
 
-          (keys/matches-key? data (keys/ctrl "-"))
+          (kb-match? this data "tui.editor.undo")
           (do (handle-undo this) nil)
 
           (keys/matches-key? data (keys/ctrl "z"))
           (do (handle-redo this) nil)
 
-          (or (keys/matches-key? data "tab")
+          (or (kb-match? this data "tui.input.tab")
               (keys/matches-key? data (keys/ctrl "i")))
           (do (handle-tab this) nil)
 
-          (keys/matches-key? data (keys/ctrl "]"))
+          (kb-match? this data "tui.editor.jumpForward")
           (do (enter-jump-mode this :forward) nil)
 
-          (keys/matches-key? data (keys/ctrl-shift "]"))
+          (or (kb-match? this data "tui.editor.jumpBackward")
+              (keys/matches-key? data (keys/ctrl-shift "]")))
           (do (enter-jump-mode this :backward) nil)
 
-          (keys/matches-key? data (keys/ctrl "u"))
+          (kb-match? this data "tui.editor.deleteToLineStart")
           (do (handle-kill-to-line-start this) nil)
 
-          (keys/matches-key? data (keys/ctrl "k"))
+          (kb-match? this data "tui.editor.deleteToLineEnd")
           (do (handle-kill-to-line-end this) nil)
 
+          ;; ctrl+w keeps kmet's kill-the-line behavior (an extra pi does not
+          ;; have on this chord); alt+backspace is the managed
+          ;; deleteWordBackward chord below
           (keys/matches-key? data (keys/ctrl "w"))
           (do (handle-kill-line this) nil)
 
-          (or (keys/matches-key? data (keys/alt "backspace"))
+          (or (kb-match? this data "tui.editor.deleteWordBackward")
               (keys/matches-key? data (keys/alt "h")))
           (do (handle-delete-word-backward this) nil)
 
-          (or (keys/matches-key? data (keys/alt "d"))
-              (keys/matches-key? data (keys/alt "delete")))
+          (kb-match? this data "tui.editor.deleteWordForward")
           (do (handle-delete-word-forward this) nil)
 
-          (keys/matches-key? data (keys/ctrl "y"))
+          (kb-match? this data "tui.editor.yank")
           (do (handle-yank this) nil)
 
-          (keys/matches-key? data (keys/alt "y"))
+          (kb-match? this data "tui.editor.yankPop")
           (do (handle-yank-pop this) nil)
 
-          (keys/matches-key? data "up")
+          (kb-match? this data "tui.editor.cursorUp")
           (do (let [state @state-atom
                     lines (:lines state)
                     cc (:cursor-col state)
@@ -1370,7 +1395,7 @@
                   (move-cursor-vertical this -1)))
               nil)
 
-          (keys/matches-key? data "down")
+          (kb-match? this data "tui.editor.cursorDown")
           (do (let [state @state-atom
                     lines (:lines state)
                     cl (:cursor-line state)
@@ -1398,48 +1423,40 @@
           (keys/matches-key? data (keys/ctrl "n"))
           (do (history-forward this) nil)
 
-          (or (keys/matches-key? data "left")
-              (keys/matches-key? data (keys/ctrl "b")))
+          (kb-match? this data "tui.editor.cursorLeft")
           (do (move-cursor-horizontal this -1)
               (refresh-autocomplete this) nil)
 
-          (or (keys/matches-key? data "right")
-              (keys/matches-key? data (keys/ctrl "f")))
+          (kb-match? this data "tui.editor.cursorRight")
           (do (move-cursor-horizontal this 1)
               (refresh-autocomplete this) nil)
 
-          (or (keys/matches-key? data "home")
-              (keys/matches-key? data (keys/ctrl "a")))
+          (kb-match? this data "tui.editor.cursorLineStart")
           (do (swap! state-atom assoc :cursor-col 0)
               (reset! preferred-col-atom nil)
               (reset! last-action nil)
               (refresh-autocomplete this) nil)
 
-          (or (keys/matches-key? data "end")
-              (keys/matches-key? data (keys/ctrl "e")))
+          (kb-match? this data "tui.editor.cursorLineEnd")
           (do (let [line (nth (:lines @state-atom) (:cursor-line @state-atom) "")]
                 (swap! state-atom assoc :cursor-col (count line))
                 (reset! preferred-col-atom nil)
                 (reset! last-action nil))
               (refresh-autocomplete this) nil)
 
-          (or (keys/matches-key? data (keys/alt "left"))
-              (keys/matches-key? data (keys/ctrl "left"))
-              (keys/matches-key? data (keys/alt "b")))
+          (kb-match? this data "tui.editor.cursorWordLeft")
           (do (move-cursor-word-left this)
               (refresh-autocomplete this) nil)
 
-          (or (keys/matches-key? data (keys/alt "right"))
-              (keys/matches-key? data (keys/ctrl "right"))
-              (keys/matches-key? data (keys/alt "f")))
+          (kb-match? this data "tui.editor.cursorWordRight")
           (do (move-cursor-word-right this)
               (refresh-autocomplete this) nil)
 
-          (keys/matches-key? data "pageUp")
+          (kb-match? this data "tui.editor.pageUp")
           (do (page-scroll this -1)
               (refresh-autocomplete this) nil)
 
-          (keys/matches-key? data "pageDown")
+          (kb-match? this data "tui.editor.pageDown")
           (do (page-scroll this 1)
               (refresh-autocomplete this) nil)
 

@@ -11,9 +11,18 @@
   (:require [clojure.string :as str]
             [kmet.tui.protocols :as protocols]
             [kmet.tui.keys :as keys]
+            [kmet.tui.keybindings :as kb]
             [kmet.tui.utils :as u]
             [kmet.tui.macros :refer [track! track-deps defcomponent]]
             [kmet.tui.components.input :as input]))
+
+;; ─── Key dispatch ─────────────────────────────────────────────────────────
+
+(defn- match?
+  "Resolve DATA against keybinding ID through the global manager (pi:
+   getKeybindings().matches) so user overrides apply to the list's keys."
+  [data keybinding-id]
+  (kb/global-match? data keybinding-id))
 
 ;; ─── Theme ──────────────────────────────────────────────────────────────────
 
@@ -173,25 +182,25 @@
           selected @selected-idx-atom]
       (cond
         ;; Escape — close
-        (keys/matches-key? data "escape")
+        (match? data "tui.select.cancel")
         (do (when-let [cb @on-escape-atom] (cb))
             nil)
 
         ;; Down / Ctrl+n — wrap around (pi)
-        (or (keys/matches-key? data "down")
+        (or (match? data "tui.select.down")
             (keys/matches-key? data (keys/ctrl "n")))
         (do (when (pos? n) (swap! selected-idx-atom #(mod (inc %) n)))
             nil)
 
         ;; Up / Ctrl+p — wrap around (pi)
-        (or (keys/matches-key? data "up")
+        (or (match? data "tui.select.up")
             (keys/matches-key? data (keys/ctrl "p")))
         (do (when (pos? n) (swap! selected-idx-atom #(mod (dec %) n)))
             nil)
 
         ;; Enter, or Space when not searching (or the query is empty) —
         ;; cycle the selected item's value (pi: activateItem)
-        (or (keys/matches-key? data "enter")
+        (or (match? data "tui.select.confirm")
             (and (keys/matches-key? data "space")
                  (or (not search?) (empty? flt))))
         (do (when (pos? n) (cycle-value! this display selected 1))

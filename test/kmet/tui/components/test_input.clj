@@ -2,6 +2,7 @@
   (:require [clojure.test :as t]
             [clojure.string :as str]
             [kmet.tui.core :as core]
+            [kmet.tui.keybindings :as kb]
             [kmet.tui.components.input :as input]))
 
 ;; ─── Construction ───────────────────────────────────────────────────────────
@@ -249,3 +250,21 @@
     (doseq [c "a\r\nb"] (core/handle-input inp (str c)))
     (core/handle-input inp "\u001b[201~")
     (t/is (= "ab" (input/input-get-value inp)) "newlines stripped from the streamed paste")))
+
+(t/deftest test-input-keys-resolve-through-the-manager
+  (t/testing "P3: the input's keys go through the manager — a user override
+              replaces the default chord"
+    (let [prev (kb/get-global-keybindings)]
+      (try
+        (kb/set-global-keybindings!
+         (kb/make-keybindings-manager kb/tui-keybinding-defs
+                                      {"tui.editor.deleteCharBackward" "ctrl+x"}))
+        (let [inp (input/make-input)]
+          (doseq [c "ab"] (core/handle-input inp (str c)))
+          (core/handle-input inp (str (char 127)))
+          (t/is (= "ab" (input/input-get-value inp)) "backspace was rebound away")
+          (core/handle-input inp (str (char 24)))
+          (t/is (= "a" (input/input-get-value inp)) "ctrl+x deletes backward"))
+        (finally
+          (kb/set-global-keybindings! prev))))))
+
