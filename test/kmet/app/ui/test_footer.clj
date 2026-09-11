@@ -3,6 +3,7 @@
             [clojure.test :as t :refer [deftest is testing]]
             [babashka.fs :as fs]
             [kmet.tui.core :as core]
+            [kmet.libs.host :as host]
             [kmet.app.session :as s]
             [kmet.app.ui.footer :as ft]
             [kmet.app.ui.footer-data-provider :as fdp]
@@ -53,16 +54,18 @@
     (let [home (System/getProperty "user.home")
           c (make-footer-with-session :cwd (str home "/project"))
           plain (render-plain c 50)]
-      (is (some #(re-find #"^К ~/project" %) plain)
-          "cwd under HOME renders home-substituted, after the К mark"))))
+      (is (some #(re-find (re-pattern (str "^К" (host/mark) " ~/project")) %) plain)
+          "cwd under HOME renders home-substituted, after the К+host mark"))))
 
 (deftest test-k-mark
-  (testing "accent cursive К mark renders before the cwd on line 1"
+  (testing "accent cursive К+host mark renders before the cwd on line 1"
     (let [c (make-footer-with-session :cwd "/some/project")
           [line1] (render-plain c 50)
-          raw (render c 50)]
-      (is (str/starts-with? line1 "К ") "line 1 starts with the К mark")
-      (is (some? (re-find #"^\u001b\[3m\u001b\[38;2;138;190;183mК" (first raw)))
+          raw (render c 50)
+          mark (str "К" (host/mark))]
+      (is (str/starts-with? line1 (str mark " "))
+          "line 1 starts with the К mark followed by the runtime letter")
+      (is (str/starts-with? (first raw) (str "\u001b[3m\u001b[38;2;138;190;183m" mark))
           "mark is italic (cursive) and accent-colored, matching the info screen"))))
 
 (deftest test-git-branch

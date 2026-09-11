@@ -1,6 +1,7 @@
 (ns kmet.app.ui.footer
   "FooterComponent — Pi's two-line footer:
-     line 1: accent cursive К mark + cwd (home-substituted) + git branch, dim
+     line 1: accent cursive К mark + hosting-runtime letter (b: babashka,
+             j: jolt) + cwd (home-substituted) + git branch, dim
      line 2: usage stats (↑in ↓out R W CH%) + context % colored by usage,
              followed by the provider/model (left-aligned, kmet deviation
              from pi's right alignment) with a pi-aligned thinking suffix:
@@ -13,6 +14,7 @@
    No separator line — the two content lines are the footer (pi parity)."
   (:require [clojure.string :as str]
             [babashka.fs :as fs]
+            [kmet.libs.host :as host]
             [kmet.tui.utils :as u]
             [kmet.tui.theme :as theme]
             [kmet.app.ui.footer-data-provider :as fdp]
@@ -88,8 +90,9 @@
                      (when-let [session-name (fdp/fdp-get-session-name provider)]
                        (str " • " session-name)))
             ;; cursive Cyrillic К mark before the folder, in the info-screen
-            ;; accent (light blue) color
-            k-mark (str (theme/italic (theme/fg thm :accent "К")) " ")
+            ;; accent (light blue) color; the hosting-runtime letter follows
+            ;; it (b: babashka, j: jolt)
+            k-mark (str (theme/italic (theme/fg thm :accent (str "К" (host/mark)))) " ")
             pwd-line (u/truncate-to-width (str k-mark (theme/dim pwd)) width (theme/dim "..."))
             ;; ── Stats left (pi: statsParts) ──────────────────────────────
             stats-parts (cond-> []

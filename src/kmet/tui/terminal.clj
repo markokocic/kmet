@@ -16,7 +16,8 @@
    A backend record owns its private state (reader/writer, raw-mode
    snapshot, progress interval atom); nothing outside the backend reads
    those fields."
-  (:require [kmet.libs.terminal :as lib]))
+  (:require [kmet.libs.host :as host]
+            [kmet.libs.terminal :as lib]))
 
 ;; ─── The protocol: platform primitives only ────────────────────────────────
 
@@ -72,18 +73,13 @@
 
 ;; ─── Backend dispatch ──────────────────────────────────────────────────────
 
-(defn- jolt-host?
-  "True on the Jolt host: jolt defines clojure.core/*jolt-version*
-   (jolt-port.md); babashka/JVM does not."
-  []
-  (boolean (find-var 'clojure.core/*jolt-version*)))
-
 (defn create-terminal
-  "Create the host's terminal backend. The backend namespace is resolved at
-   call time, so the JLine backend never loads on Jolt (no org.jline.*) and
-   the FFI backend never loads on bb/JVM (no jolt.ffi)."
+  "Create the host's terminal backend (Jolt detection: kmet.libs.host).
+   The backend namespace is resolved at call time, so the JLine backend
+   never loads on Jolt (no org.jline.*) and the FFI backend never loads on
+   bb/JVM (no jolt.ffi)."
   []
-  (if (jolt-host?)
+  (if (host/jolt?)
     ((requiring-resolve 'kmet.tui.terminal-native/create-terminal))
     ((requiring-resolve 'kmet.tui.terminal-jline/create-terminal))))
 

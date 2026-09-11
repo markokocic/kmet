@@ -19,6 +19,7 @@
             [kmet.app.skills :as skills]
             [kmet.app.prompts :as prompts]
             [kmet.libs.context :as context]
+            [kmet.libs.host :as host]
             [kmet.app.extensions :as extensions]
             [kmet.app.theme-controller :as theme-ctrl]
             [kmet.ai.models :as models]
@@ -68,6 +69,12 @@
                  :details "Stopped: repeated identical tool calls"}
     ;; the remaining vocabulary events carry only :type
     {:type type}))
+
+(deftest header-logo-names-the-host
+  (testing "the welcome header logo names the hosting runtime after kmet"
+    (let [logo ((var inter/fmt-header-logo))]
+      (is (str/includes? logo (str "kmet (" (host/runtime-name) ")"))
+          "logo reads 'kmet (babashka)' / 'kmet (jolt)'"))))
 
 (deftest handle-new-session-clears-context
   (testing "/new (pi: handleClearCommand → runtimeHost.newSession) swaps in a

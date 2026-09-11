@@ -12,6 +12,7 @@
             [kmet.tui.components.container :as container]
             [kmet.tui.hiccup :as hiccup]
             [kmet.libs.reakt :as r]
+            [kmet.libs.host :as host]
             [kmet.app.ui :as ui]
             [kmet.app.ui.subs :as subs]
             [kmet.app.ui.image-block :as image-block]
@@ -226,9 +227,11 @@
   (str (th/dim key) (th/fg (th/get-current-theme) :muted (str " " desc))))
 
 (defn- fmt-header-logo
-  "Pi: logo — bold accent app name."
+  "Pi: logo — bold accent app name, followed by the hosting runtime in
+   parentheses (kmet deviation)."
   []
-  (th/bold (th/fg (th/get-current-theme) :accent "kmet")))
+  (th/bold (th/fg (th/get-current-theme) :accent
+                  (str "kmet (" (host/runtime-name) ")"))))
 
 (defn- fmt-header-compact
   "Compact welcome header (pi: compactInstructions + compactOnboarding)."
