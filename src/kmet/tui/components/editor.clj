@@ -370,14 +370,34 @@
                       (vec (ac/get-trigger-characters ap))
                       []))))
 
+;; Memo of the compiled autocomplete trigger spec per trigger-char set:
+;; {:pattern re :chars #{\c …}}. The set comes from the provider's
+;; `get-trigger-characters` and is stable per provider, so keying on its
+;; joined chars keeps re-pattern (with its escaping pass) off the
+;; per-keystroke path.
+(defonce ^:private trigger-spec-cache (atom {}))
+
+(defn- trigger-spec
+  "Compiled trigger info for EDITOR: {:pattern re :chars #{…}}, rebuilt only
+   when the trigger-char set changes (the escaping pass and re-pattern were
+   per keystroke)."
+  [editor]
+  (let [chars (provider-trigger-chars editor)
+        k (clojure.string/join "\u0000" chars)]
+    (or (get @trigger-spec-cache k)
+        (let [escaped (->> chars
+                           (map #(clojure.string/replace % #"[\\^$.*+?()\[\]{}|-]" "\\$&"))
+                           (clojure.string/join ""))
+              spec {:pattern (re-pattern (str "(?:^|[\\s])[" escaped "][^\\s]*$"))
+                    :chars (set chars)}]
+          (swap! trigger-spec-cache assoc k spec)
+          spec))))
+
 (defn- trigger-pattern
   "Regex matching text-before-cursor that is in a symbol-trigger context
    (e.g. \"@foo\" at line start or after whitespace)."
   [editor]
-  (let [escaped (->> (provider-trigger-chars editor)
-                     (map #(clojure.string/replace % #"[\\^$.*+?()\[\]{}|-]" "\\$&"))
-                     (clojure.string/join ""))]
-    (re-pattern (str "(?:^|[\\s])[" escaped "][^\\s]*$"))))
+  (:pattern (trigger-spec editor)))
 
 (defn- is-at-start-of-message?
   [editor]
@@ -526,7 +546,7 @@
         (and (= char "/") (is-at-start-of-message? editor))
         (request-autocomplete editor {:force false :explicit-tab false})
 
-        (contains? (set (provider-trigger-chars editor)) char)
+        (contains? (:chars (trigger-spec editor)) char)
         (let [char-before (when (>= (count before) 2)
                             (subs before (- (count before) 2) (dec (count before))))]
           (when (or (= (count before) 1)

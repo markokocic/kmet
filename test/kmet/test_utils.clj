@@ -11,6 +11,41 @@
   (t/is (= 6 (u/visible-width "中文🍎")))   ;; 2+2+2=6
   (t/is (= 6 (u/visible-width "ab\tc"))))   ;; tab expands to 3 spaces (pi)
 
+(t/deftest test-strip-ansi-host-equivalence
+  ;; The Jolt path strips ANSI with a hand-rolled scanner (strip-ansi-native)
+  ;; while bb/JVM keep the regex strip. The scanner must accept exactly the
+  ;; regex's language — including the sequences the regex does NOT match
+  ;; (private-parameter CSI, unterminated OSC, a lone ESC), which must stay
+  ;; in the output as literal text. Both implementations run on both hosts,
+  ;; so this test pins them against each other wherever the suite runs.
+  (let [regex-strip (fn [s]
+                      (str/replace s
+                                   #"\u001b\[[0-9;]*[a-zA-Z]|\u001b\][^\u0007\u001b\u009c]*(?:\u001b\\|\u0007|\u009c)"
+                                   ""))
+        native-strip (var-get #'u/strip-ansi-native)
+        corpus ["" "plain" "a\tb" "中文"
+                "\u001b[31mred\u001b[0m"
+                "\u001b[38;5;196mx\u001b[39m"
+                "\u001b[?25lprivate\u001b[?25h"
+                "\u001b]8;;https://x.example/\u0007link\u001b]8;;\u0007"
+                "\u001b]0;title\u001b\\after"
+                "\u001b]0;unterminated"
+                "\u001b["
+                "\u001b"
+                "\u001bX"
+                "\u001b[1;31"
+                "\u001b[1;31m"
+                "pre\u001b[1moops\u001b[m\u001b[?25l"
+                "\u001b[?2026h\u001b[1;1H\u001b[?2026l"
+                (str "你好" "\u001b[31m" "你好")]]
+    (doseq [s corpus]
+      (t/is (= (regex-strip s) (native-strip s)) (pr-str s))))
+  ;; and the public width path agrees on strip-needing input
+  (t/is (= 3 (u/visible-width "\u001b[31mabc\u001b[0m")))
+  ;; private-parameter CSI is NOT ANSI-CODE-RE: ESC measures 0, the rest
+  ;; sorts as literal text (the documented quirk both strippers share)
+  (t/is (= 5 (u/visible-width "\u001b[?25l"))))
+
 (t/deftest test-visible-width-narrow-dingbats
   ;; Regression: the coarse emoji block ranges (0x2600-0x27BF etc.) counted
   ;; text-presentation dingbats as 2 columns, so background padding ended a

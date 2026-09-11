@@ -117,7 +117,26 @@
 
 ;; ─── Kitty protocol state (owned by kmet.libs.terminal) ────────────────────
 
-(defn set-kitty-active! [v] (lib/set-kitty-active! v))
+;; One-slot memo for parse-key. Within one keystroke the same raw input is
+;; parsed once per chord of every binding checked (30-60 times: the editor's
+;; builtin ids plus the app action handlers), so a single slot keyed on the
+;; data string and the kitty-mode flag collapses the repeats. parse-key is a
+;; pure function of (data, kitty-active?, legacy-map), so the slot is safe;
+;; the stored flag makes the entry self-invalidating when the mode flips.
+(defonce ^:private parse-cache (atom nil))
+
+;; Key-id string → {:key … :mods #{…}}. The id vocabulary is fixed and
+;; small (the keybinding tables), so this stays bounded; it keeps the
+;; per-check str/split + set construction off the keystroke path.
+(defonce ^:private normalized-id-cache (atom {}))
+
+(defn set-kitty-active!
+  "Set the kitty keyboard mode flag and drop the parse memo: the flag
+   changes how the same raw bytes parse (the cached entry records the flag
+   and self-invalidates, this just releases it eagerly)."
+  [v]
+  (reset! parse-cache nil)
+  (lib/set-kitty-active! v))
 (defn kitty-active? [] (lib/kitty-active?))
 
 ;; ─── Kitty key decoding (pi: keys.ts formatParsedKey) ──────────────────────
@@ -384,20 +403,35 @@
 
 (declare parse-key)
 
+(defn- parse-key-cached
+  [data]
+  (let [kitty? (boolean (lib/kitty-active?))
+        [c-data c-kitty parsed] @parse-cache]
+    (if (and (= c-data data) (= c-kitty kitty?))
+      parsed
+      (let [parsed (parse-key data)]
+        (reset! parse-cache [data kitty? parsed])
+        parsed))))
+
+(defn- normalize-key-id
+  [id]
+  (or (get @normalized-id-cache id)
+      (let [parts (str/split id #"\+")
+            norm (when (seq parts)
+                   {:key (last parts)
+                    :mods (set (butlast parts))})]
+        (when norm (swap! normalized-id-cache assoc id norm))
+        norm)))
+
 (defn matches-key?
   "Check if raw input data matches a key identifier (e.g. \"ctrl+c\", \"up\").
    Modifier order is insignificant (pi: parseKeyId splits on '+'), so
    \"shift+ctrl+p\" and \"ctrl+shift+p\" match the same key."
   [data key-id]
-  (let [parsed (parse-key data)
-        normalize (fn [id]
-                    (let [parts (str/split id #"\+")]
-                      (when (seq parts)
-                        {:key (last parts)
-                         :mods (set (butlast parts))})))]
+  (let [parsed (parse-key-cached data)]
     (when parsed
-      (let [a (normalize parsed)
-            b (normalize key-id)]
+      (let [a (normalize-key-id parsed)
+            b (normalize-key-id key-id)]
         (and a b (= a b))))))
 
 (defn parse-key

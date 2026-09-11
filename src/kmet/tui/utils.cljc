@@ -16,6 +16,69 @@
 (def ^:private ANSI-CODE-RE
   #"\u001b\[[0-9;]*[a-zA-Z]|\u001b\][^\u0007\u001b\u009c]*(?:\u001b\\|\u0007|\u009c)")
 
+(defn- ansi-sequence-end
+  "End index (exclusive) of the ANSI escape sequence starting at index I of
+   S when one starts there, nil otherwise. Hand-rolled equivalent of
+   ANSI-CODE-RE anchored at I (same accepted CSI/OSC language, including
+   what the regex does NOT match: private-parameter CSI like \"ESC[?25l\"
+   has no regex match and must stay literal text). Used on Jolt only, where
+   the regex engine is the slowest primitive; the utils test suite pins
+   this scanner and the regex against each other on a corpus."
+  [s i]
+  (let [n (count s)]
+    (when (and (< i n) (= \u001b (nth s i)) (< (inc i) n))
+      (let [c (nth s (inc i))]
+        (cond
+          ;; CSI: ESC [ [0-9;]* final-byte
+          (= c \[)
+          (loop [j (+ i 2)]
+            (if (>= j n)
+              nil
+              (let [ch (int (nth s j))]
+                (cond
+                  (or (= ch 0x3b) (<= 0x30 ch 0x39)) (recur (inc j))
+                  (or (<= 0x41 ch 0x5a) (<= 0x61 ch 0x7a)) (inc j)
+                  :else nil))))
+          ;; OSC: ESC ] … BEL | ST | 0x9c
+          (= c \])
+          (loop [j (+ i 2)]
+            (if (>= j n)
+              nil
+              (let [ch (int (nth s j))]
+                (cond
+                  (or (= ch 0x07) (= ch 0x9c)) (inc j)
+                  (and (= ch 0x1b) (< (inc j) n) (= 0x5c (int (nth s (inc j))))) (+ j 2)
+                  :else (recur (inc j))))))
+          :else nil)))))
+
+(defn strip-ansi-native
+  "Remove ANSI sequences with the hand-rolled scanner: str/index-of seeds
+   each search (native on both hosts), ansi-sequence-end consumes the
+   sequence, and a non-sequence ESC is kept as literal text, exactly like
+   the regex strip. ~5x faster than the regex strip on Jolt for styled
+   lines and ~3x for no-escape strings (the regex still scans them)."
+  [s]
+  (let [n (count s)]
+    (loop [pos 0 out nil]
+      (if (>= pos n)
+        (or out s)
+        (let [idx (str/index-of s "\u001b" pos)]
+          (if (nil? idx)
+            (str (or out "") (subs s pos))
+            (if-let [end (ansi-sequence-end s idx)]
+              (recur end (str (or out "") (subs s pos idx)))
+              (recur (inc idx) (str (or out "") (subs s pos (inc idx)))))))))))
+
+(defn- strip-ansi
+  "Remove ANSI CSI/OSC sequences from S — the one implementation behind
+   strip-ansi-codes and visible-width. Jolt takes the scanner (its regex
+   engine is irregex: 17 µs vs 3.4 µs on a styled 100-char line); babashka
+   and the JVM stay on the regex strip, where java.util.regex is the faster
+   primitive (4.6 µs vs 8 µs)."
+  [s]
+  #?(:jolt (strip-ansi-native s)
+     :default (str/replace s ANSI-CODE-RE "")))
+
 (defn- match-at
   "Match RE in S starting exactly at index I — the anchored-scan idiom
    (.find m i) + (= (.start m) i). Returns [match-text end] with END
@@ -283,12 +346,21 @@
         (count s))))
 (defn visible-width
   "Calculate the visible display width of a string in terminal columns.
-   Strips ANSI escape codes before measuring.
-   Fast path for plain ASCII (no CJK/emoji) — just returns count."
+   Strips ANSI escape codes before measuring. The printable-ASCII test runs
+   FIRST: it matches any ESC byte too, so a plain line answers with `count`
+   and never touches the strip, and a styled line pays one cheap scan
+   before the strip (this is the per-line / per-grapheme hot path — the
+   regex engine is the slowest primitive on Jolt). Non-ASCII or ESC text
+   falls through to the ANSI-free walker, which itself fast-paths plain
+   ASCII."
   [s]
   (if (empty? s) 0
-      (let [clean (clojure.string/replace s ANSI-CODE-RE "")]
-        (visible-width-plain clean))))
+      (if (re-find #"[^\u0020-\u007e]" s)
+        (visible-width-plain
+         (if (str/includes? s "\u001b")
+           (strip-ansi s)
+           s))
+        (count s))))
 
 ;; ─── Truncation ─────────────────────────────────────────────────────────────
 
@@ -630,8 +702,11 @@
 
 ;; ─── ANSI helpers ───────────────────────────────────────────────────────────
 
-(defn strip-ansi-codes [s]
-  (clojure.string/replace s ANSI-CODE-RE ""))
+(defn strip-ansi-codes
+  "Strip ANSI CSI/OSC sequences from S (host-optimal: the scanner on Jolt,
+   java.util.regex elsewhere)."
+  [s]
+  (strip-ansi s))
 
 (defn sgr
   ([code] (str "\u001b[" code "m"))
