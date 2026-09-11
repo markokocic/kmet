@@ -970,12 +970,13 @@ kmet.libs.*     self-contained (terminal protocol lives here too)
 Sections 1–13 describe current behavior. **The items below are not
 implemented** — this is a plan record, kept so the analysis behind the
 decisions is not lost. When an item lands, fold its behavior into the
-relevant section, add it to the Done table and strike it from the plan.
+relevant section, add it to the Done table and strike it from the plan; a
+declined item moves to "Deliberately not borrowing" with its rationale.
 
-Sources: the R items are ideas borrowed from glimmer; the P items (pi
-parity) that fed this layer have all landed (P1, P2). The remaining
-kmet↔pi gaps are tracked in `alignment.md` §2, and the rendering-shaped
-ones are postponed below.
+Sources: the R items are ideas borrowed from glimmer (R1–R6 landed, R3b
+and R7 declined 2026-09-11); the P items are pi parity (P1, P2 landed, P3
+planned). The remaining kmet↔pi gaps are tracked in `alignment.md` (§2,
+§6), and the rendering-shaped ones are postponed below.
 
 - **R items — ideas borrowed from [glimmer](https://github.com/jolt-lang/glimmer)**
   (a reactive core + reagent-style component model targeting Jolt) and
@@ -999,12 +1000,16 @@ ones are postponed below.
 | P1 | skill invocation message | `kmet.app.skills/parse-skill-block` (the inverse of the expander) + `kmet.app.ui.skill-message` — a `/skill:name` block renders as a collapsible `[skill] name (ctrl+o to expand)` message instead of dumping its body into the transcript |
 | P2 | images in chat (TUI half) | `kmet.app.ui.image_block` + the live `ui.subs/image-settings-sub`: tool-result and user/custom-message images render inline, or as the `imageFallback` text indicator when `:show-images` is off / the terminal lacks support; `:terminal {:show-images :image-width-cells}` in `config.clj` + terminal-support-gated `/settings` rows. The wire half landed separately: `images.blockImages` = `app/loop.clj` (`convertToLlmWithBlockImages`) + an ungated `/settings` row; `images.autoResize` stays provider work (tracked in `alignment.md` §2) |
 
-### Plan — borrowed from glimmer
+### Plan
 
-| # | borrow | kmet pain point | lands in | size |
+| # | item | kmet pain point | lands in | size |
 |---|---|---|---|---|
-| R3b | focus-derived help line | nothing shows what the focused component answers to; hint lines are hand-written per dialog | a help-line component + where per-component declarations live | small |
-| R7 | declarative `:overlay` | dialogs are shown imperatively; declaration site ≠ owner | `hiccup.clj` + `tui.core` | large (spike) |
+| P3 | widget keys resolve through the manager | pi's `select-list`/`input`/`settings-list`/editor resolve `tui.select.*`/`tui.input.*`/`tui.editor.*` through `getKeybindings()`; kmet's counterparts match raw chords, so a user rebind moves the hint (it reads the manager) and the app's selector panels but not the widget itself | `kmet.tui.components.*` | small |
+
+The two glimmer borrows that were pending here — R3b (focus-derived help
+line) and R7 (declarative `:overlay`) — were re-evaluated and declined
+2026-09-11; the analysis is recorded under "Deliberately not borrowing"
+so it is not redone.
 
 ### Postponed indefinitely
 
@@ -1017,25 +1022,6 @@ analysis is not redone — revisit only on a concrete user request.
 | LaTeX rendering | `tui/src/latex.ts` | same shape of work as Mermaid, smaller audience |
 | Alt-screen search | `alt-screen-search.ts` | needs a fullscreen/alt-screen mode (below) and the transcript model here is the native scrollback, not an owned viewport |
 | Fullscreen (alt-screen) TUI mode | `--tui-mode` | the opposite of the deliberate inline model (§1: transcript in the native scrollback, `\u001b[3J`-based full redraws); an alt-screen mode would fork the renderer, the scroll model and every overlay/scroll assumption |
-
-### R7 — declarative `:overlay` (spike)
-
-**Pain.** The overlay stack is imperative: dialogs/screens are built and
-shown through `tui-show-overlay` with options, so a component that owns
-dialog state must also know about the stack — the declaration site is not
-the owner.
-
-**Borrow.** In glimmer-tui an overlay is a tree element: it takes no space
-at its declaration site, is painted last (never clipped by the box it was
-declared in), traps focus while modal, and closes on Esc.
-
-**Proposal.** An `[:overlay {…} child]` tag that registers with the host
-overlay stack on first reconcile and unregisters on dispose — the tree
-declares, the session keeps owning z-order, sizing and focus (kmet's
-placement is computed from terminal size by the session; that stays). Not
-portable verbatim: kmet's in-tree layout is line concatenation, with no
-screen coordinates to anchor to. Needs a tree → session hook (a dynamic var
-around a mount, or a per-session registry) — that hook is the spike.
 
 ### Deliberately not borrowing
 
@@ -1072,10 +1058,41 @@ Recorded so the analysis is not redone:
 - **`reload!` / `run-async` / `usable-terminal?`** — kmet's dev loop is
   nREPL + `tui-invalidate`, and it owns its terminal adapter (JLine, stty
   snapshots).
+- **Focus-derived help line (R3b)** — glimmer-tui derives a help bar from
+  the focused widget's `:bindings`. Declined as specced 2026-09-11:
+  "focus-derived" is nearly vacuous here (focus is imperative and every
+  dialog has exactly one focusable child, so a declaration would just
+  name that child), and hint choreography is dynamic per dialog
+  (delete-confirm rows, expand↔collapse, filter modes). Key text cannot
+  drift already — hints read the shared chord table (§7.1) — so only the
+  per-dialog item lists stay hand-written, which is where they belong.
+  One piece stays opportunistic, untracked: the tree selector's chunk
+  renderer (`compact-raw-keys`/`format-help-keys` plus wrapping) is the
+  only wrapped hint composition — extract it into a shared help-line
+  helper if a third dialog needs one.
+- **Declarative `:overlay` (R7)** — glimmer-tui declares an overlay in the
+  tree: no space at its declaration site, painted last and never clipped,
+  modal focus capture, Esc closes. Declined 2026-09-11. The pain is real
+  but small: dialogs are shown imperatively (`tui-show-overlay`), so
+  declaration site ≠ owner, yet only ~4 flows float — tree label-edit
+  input, the branch-summary asks, custom-summary input, extension
+  `ui-custom` overlays; every other panel docks in the editor like pi's
+  `showSelector`, which the dock already renders declaratively. The
+  imperative stack would stay underneath regardless (placement, sizing,
+  z-order and focus restore are session-owned; kmet renders lines, with no
+  screen coordinates to anchor to, so "painted last, never clipped" is
+  moot), and keeping overlay identity and focus order stable across
+  re-rendered declarations is the real work — the tree→session hook is
+  the spike. Esc-closes conflicts with per-dialog escape semantics (tree
+  back-navigation, login cancel); pi is imperative (`showOverlay`), so a
+  declarative path would fork every future dialog port, and extension
+  overlays must stay imperative anyway. If dialog-chaining ownership ever
+  bites, the 80% is an app-level flow helper in `app/ui` (a small state
+  stack + `next!`/`back!` over `tui-show-overlay`) — no core changes.
 
 ### Suggested order
 
-R7 as a spike, now that the tag-table extension path has been exercised
-several times (R5, R6, R3a, R4, P1, P2, R1, R2). R3b waits on the
-declarations decision.
+P3 first: small, and it is what keeps hints honest under user rebinds.
+Nothing else is tracked — the R3b extraction is opportunistic (only if a
+third dialog needs wrapped chunks) and R7 is declined.
 

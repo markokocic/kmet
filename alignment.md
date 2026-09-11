@@ -224,6 +224,12 @@ Full extension API surface (pi `core/extensions/types.ts`) — one remaining gap
   the filter modes in `/tree` (`tree-filter-modes`, `cycle-filter!`) — **done**: the 7
   `app.tree.filter.*` ids + `app.tree.editLabel` are now registered keybindings the
   tree selector resolves through the keybindings manager (rebindable)
+- **Widget keys through the keybindings manager** — pi's generic components
+  (`select-list.ts`, `input.ts`, `settings-list.ts`, editor navigation) call
+  `getKeybindings()` for `tui.select.*`/`tui.input.*`/`tui.editor.*`; kmet's
+  counterparts match raw chords, so a user override moves the hint (which reads the
+  manager) and the app's selector panels (session/model/tree/auth/fork/scoped/thinking
+  and login already resolve ids) but not the widget itself — **planned**: `tui.md` §14 P3
 - **`/settings` menu breadth** — kmet `/settings` covers thinking/hide-thinking/retry only;
   **done (theme)**: a theme row (name switch + persist) was added; **done (images)**: the
   Show images / Image width rows (pi: show-images-selector, gated on terminal image
