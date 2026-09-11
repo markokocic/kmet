@@ -38,8 +38,11 @@
   of `bb lint`/`bb format`/`bb format-check` and the changed-file scan. Extension tests are
   separate projects — they run from inside their directory (own deps), never from the root
   runner; `bb test-changed` prints a hint instead of silently skipping them.
-- **Deps**: first-party Babashka libraries (`babashka.fs`, `babashka.process`) in `deps.edn`;
-  tooling deps (`cljfmt`) in `bb.edn` `:deps`; JLine **4.3.1** bundled with Babashka (see
+- **Deps**: no `deps.edn` entry for `babashka.fs` / `babashka.process` — babashka bundles them and
+  jolt vendors the same namespaces (built-in, resolving ahead of any classpath copy; public
+  surfaces `jolt.fs` / `jolt.process` — `jolt.fs` excludes zip/gzip). A Maven copy would only
+  risk shadowing the vendored one, so kmet relies on both hosts' built-ins.
+  Tooling deps (`cljfmt`) in `bb.edn` `:deps`; JLine **4.3.1** bundled with Babashka (see
   babashka `deps.edn`: `org.jline/jline-terminal`, `org.jline/jline-reader`) as the
   bb/JVM terminal backend — the Jolt terminal backend uses no dependency: termios /
   kernel32 through `jolt.ffi`.

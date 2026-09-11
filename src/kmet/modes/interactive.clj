@@ -3211,8 +3211,8 @@
 (defn- build-layout
   "Create TUI layout and return CoreState."
   [config session]
-  (let [jline-term (term/create-terminal)
-        t (tui/create-tui jline-term)
+  (let [tui-term (term/create-terminal)
+        t (tui/create-tui tui-term)
 
         ;; Resolve model and provider from config
         provider (cfg/get-provider config)

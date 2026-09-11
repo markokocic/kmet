@@ -1,6 +1,13 @@
 {:paths ["src"]
- :deps {babashka/fs {:mvn/version "0.5.34"}
-        babashka/process {:mvn/version "0.6.25"}
+ :deps {
+        ;; babashka.fs / babashka.process are deliberately NOT deps: babashka
+        ;; bundles them, and jolt vendors the same namespaces (built-in,
+        ;; resolving ahead of any deps.edn copy). A Maven copy is redundant on
+        ;; both hosts and only risks shadowing the vendored one. jolt's public
+        ;; surfaces are jolt.fs / jolt.process (the vendored impls, zip/gzip
+        ;; excluded from jolt.fs); kmet requires babashka.fs/process directly,
+        ;; which resolves to the vendored copy on jolt.
+
         ;; in-process Maven closure resolution for extension deps.edn
         ;; (0.0.21 = last version without the clojure-tools installer)
         borkdude/deps.clj {:mvn/version "0.0.21"}
@@ -33,7 +40,7 @@
         ;; fix/bionic-addrinfo — the upstream `ai_addr` offset is glibc's
         ;; (24), while bionic's struct addrinfo is BSD-ordered (32), so
         ;; connect(2) gets a NULL sockaddr and every platform-transport
-        ;; request fails EFAULT on Android/Termux (bb-jolt.md JOLT-9). The
+        ;; request fails EFAULT on Android/Termux (JOLT-9). The
         ;; branch is ONE commit on upstream main 4744256; the PR is now
         ;; jolt-lang/http-client#19 (open, **not merged** as of 2026-09-11 —
         ;; upstream main is still 4744256, re-checked 2026-09-11). Revert
