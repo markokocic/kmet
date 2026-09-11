@@ -71,6 +71,8 @@ atom change → reaction dirty → queued → frame flush runs it →
 | namespace | role |
 |---|---|
 | `kmet.tui.core` | TUI instance: create/start/stop, child list, focus, overlays, input listeners, flash, render loop with line diffing |
+| `kmet.tui.terminal` | backend abstraction: the lean `ITerminal` protocol (raw mode, bounded reads, live size, writes, progress) + shared ANSI verbs, Kitty/query wrappers and drain; `create-terminal` resolves the host backend at runtime |
+| `kmet.tui.terminal-jline` / `kmet.tui.terminal-native` | the two backends — JLine on bb/JVM, termios (Unix; kernel32 pending) FFI over `jolt.ffi` on Jolt; only these namespaces touch platform deps |
 | `kmet.tui.protocols` | `IComponent`, `IFocusable`, `IEditorComponent` |
 | `kmet.tui.macros` | `defcomponent`, `track!`, `with-let`, `invalidate-cache`, deref-capture runtime |
 | `kmet.libs.reakt` | reactions/track/cursor/batching over plain atoms |
@@ -800,7 +802,7 @@ was replaced by the shared table.
 
 ## 8. Protocols
 
-Exactly three, by design:
+Exactly three component protocols, by design:
 
 ```clojure
 (defprotocol IComponent            ; implemented for you by defcomponent
@@ -815,6 +817,14 @@ Exactly three, by design:
 (defprotocol IEditorComponent      ; extension seam for alternative editors
   (editor-get-text [this]) (editor-set-text! [this text]) …)
 ```
+
+The package has one more protocol, outside the component model:
+`kmet.tui.terminal/ITerminal` — the lean platform seam every terminal
+backend implements (`start!`/`stop!`/`started?`/`write-output`/
+`read-input`/`columns`/`rows`/`set-progress!`). The cursor/clear/title
+verbs, Kitty/query wrappers and the drain loop are plain fns above it, so
+a backend supplies only its platform primitives (`kmet.tui.terminal-jline`,
+`kmet.tui.terminal-native` — §13).
 
 Notes:
 
@@ -1097,8 +1107,9 @@ Recorded so the analysis is not redone:
   sequences only to keep the input buffer clean (§7) and has no owned
   viewport to hit-test. A feature (alt-screen region), not a transplant.
 - **`reload!` / `run-async` / `usable-terminal?`** — kmet's dev loop is
-  nREPL + `tui-invalidate`, and it owns its terminal adapter (JLine, stty
-  snapshots).
+  nREPL + `tui-invalidate`, and it owns its terminal adapter
+  (`kmet.tui.terminal`: JLine on bb/JVM, termios/kernel32 FFI on Jolt —
+  both behind the `ITerminal` protocol).
 - **Focus-derived help line (R3b)** — glimmer-tui derives a help bar from
   the focused widget's `:bindings`. Declined as specced 2026-09-11:
   "focus-derived" is nearly vacuous here (focus is imperative and every

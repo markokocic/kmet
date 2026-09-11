@@ -4476,9 +4476,9 @@
             (catch Exception e
               (debug/log "theme detection: " e))))
         ;; Set the initial terminal title (pi: updateTerminalTitle in init —
-        ;; after ui.start). Waits for the render loop so the JLine writer is
-        ;; live (the unstarted terminal record's writer is nil and writes are
-        ;; silently dropped); --continue/--resume sessions restored in
+        ;; after ui.start). Waits until the backend reports started? (raw mode
+        ;; entered; a write before that could interleave with the pre-TUI
+        ;; terminal state); --continue/--resume sessions restored in
         ;; build-layout get their display name reflected here.
         (future
           (try
@@ -4490,7 +4490,7 @@
             (when @(:running? (:tui cs))
               (loop []
                 (when (and @(:running? (:tui cs))
-                           (nil? (:writer @(:terminal (:tui cs)))))
+                           (not (term/started? @(:terminal (:tui cs)))))
                   (Thread/sleep 20)
                   (recur)))
               (when @(:running? (:tui cs))

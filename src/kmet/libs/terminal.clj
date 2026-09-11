@@ -260,3 +260,76 @@
                (<= (count encoded) max-osc52-encoded-length))
       (write-fn (str "\u001b]52;c;" encoded "\u0007"))
       true)))
+
+;; ─── Incremental UTF-8 decode (byte-oriented terminals) ────────────────────
+;; A platform read() returns whole buffers, so a multi-byte character can
+;; straddle two reads at any byte offset. Decode into complete code points
+;; plus a trailing tail to prepend to the next buffer.
+
+(defn utf8-decode
+  "Decode UTF-8 from BYTES (any sequence of integers, masked to 0-255) into
+   [CODEPOINTS TAIL]: CODEPOINTS is a vector of the code points that formed
+   complete sequences, TAIL a vector of the 0-3 bytes of an incomplete
+   trailing sequence (prepend it to the next chunk; a buffer boundary is not
+   a character boundary). Invalid bytes decode to U+FFFD; surrogate and
+   overlong encodings are rejected as invalid."
+  [bytes]
+  (let [bs (mapv #(bit-and (int %) 0xFF) bytes)
+        n (count bs)]
+    (loop [i 0 out []]
+      (cond
+        (>= i n)
+        [out []]
+
+        (< (nth bs i) 0x80)
+        (recur (inc i) (conj out (nth bs i)))
+
+        ;; 2-byte: C2..DF (C0/C1 only encode overlong ASCII)
+        (<= 0xC2 (nth bs i) 0xDF)
+        (if (< n (+ i 2))
+          [out (subvec bs i n)]
+          (let [b1 (nth bs (inc i))]
+            (if (= 0x80 (bit-and b1 0xC0))
+              (recur (+ i 2) (conj out (bit-or (bit-shift-left (bit-and (nth bs i) 0x1F) 6)
+                                               (bit-and b1 0x3F))))
+              (recur (inc i) (conj out 0xFFFD)))))
+
+        ;; 3-byte: E0..EF; E0 requires A0+ and ED forbids the surrogate range
+        (<= 0xE0 (nth bs i) 0xEF)
+        (if (< n (+ i 3))
+          [out (subvec bs i n)]
+          (let [b0 (nth bs i)
+                b1 (nth bs (+ i 1))
+                b2 (nth bs (+ i 2))
+                valid-b1 (and (= 0x80 (bit-and b1 0xC0))
+                              (if (= b0 0xE0) (>= b1 0xA0) true)
+                              (if (= b0 0xED) (<= b1 0x9F) true))]
+            (if (and valid-b1 (= 0x80 (bit-and b2 0xC0)))
+              (recur (+ i 3) (conj out (bit-or (bit-shift-left (bit-and b0 0x0F) 12)
+                                               (bit-shift-left (bit-and b1 0x3F) 6)
+                                               (bit-and b2 0x3F))))
+              (recur (inc i) (conj out 0xFFFD)))))
+
+        ;; 4-byte: F0..F4; F0 requires 90+ and F4 caps at 8F (U+10FFFF)
+        (<= 0xF0 (nth bs i) 0xF4)
+        (if (< n (+ i 4))
+          [out (subvec bs i n)]
+          (let [b0 (nth bs i)
+                b1 (nth bs (+ i 1))
+                b2 (nth bs (+ i 2))
+                b3 (nth bs (+ i 3))
+                valid-b1 (and (= 0x80 (bit-and b1 0xC0))
+                              (if (= b0 0xF0) (>= b1 0x90) true)
+                              (if (= b0 0xF4) (<= b1 0x8F) true))]
+            (if (and valid-b1
+                     (= 0x80 (bit-and b2 0xC0))
+                     (= 0x80 (bit-and b3 0xC0)))
+              (recur (+ i 4) (conj out (bit-or (bit-shift-left (bit-and b0 0x07) 18)
+                                               (bit-shift-left (bit-and b1 0x3F) 12)
+                                               (bit-shift-left (bit-and b2 0x3F) 6)
+                                               (bit-and b3 0x3F))))
+              (recur (inc i) (conj out 0xFFFD)))))
+
+        :else
+        ;; stray continuation (80..BF) or invalid lead (C0/C1, F5..FF)
+        (recur (inc i) (conj out 0xFFFD))))))

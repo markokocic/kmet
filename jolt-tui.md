@@ -15,8 +15,10 @@ raw input**, with the platform half swapped from JLine to C FFI.
 > This rewrite fixes both.
 
 Source of truth: `src/kmet/tui/tui.md` (package docs),
-`src/kmet/tui/terminal.clj` (the only file that must be rewritten),
-`src/kmet/libs/terminal.clj` + `src/kmet/tui/keys.clj` (port verbatim),
+`src/kmet/tui/terminal.clj` (the protocol seam + shared terminal logic),
+`src/kmet/tui/terminal_jline.clj` (bb/JVM backend) and
+`src/kmet/tui/terminal_native.cljc` (Jolt backend),
+`src/kmet/libs/terminal.clj` + `src/kmet/tui/keys.clj` (portable),
 `src/kmet/tui/core.clj` (input/render loop to reimplement against).
 Jolt API refs: `jolt-lang.github.io/docs/native-interop.html`,
 `docs/host-interop.html`.
@@ -27,42 +29,98 @@ deep-dive).
 
 ## 0. Status
 
-**The portable core is already there — verified, no code changes.** `jolt
-test` is green (2032 tests / 13803 assertions, `jolt v0.8.6-18-g64bdeff4`,
-2026-09-10): `kmet.libs.reakt`, `kmet.tui.{hiccup,macros,protocols,keys,
-keybindings,utils,theme,border,timers}`, all 21 `kmet.tui.components.*` and
-the `kmet.app.ui.*` layer above them run on Jolt as-is. Nothing in those
-namespaces imports JLine or any other JVM-only class, and the headless
-surface (`hiccup/render-lines`, `core/render`) is what the tests drive —
-so steps 2–3 of §13 below are done, and §10's "port" column for the whole
-component set means *no work required*.
+### Current (2026-09-11): the terminal adapter exists on Unix
 
-**What remains is everything that touches the real terminal**, and one
-measured red set:
+**Implemented and verified end to end on `jolt v0.8.6-72-g0f7d1a11`
+(WSL2 x86_64).** The abstraction was first made total on bb/JVM (no
+behavior change), then the Jolt backend landed:
 
-| item | file | state |
-|---|---|---|
-| raw mode, timed reads, live size, restore-on-every-path, Windows console | `kmet/tui/terminal.clj` (§§2, 4–6) | JLine-only today — the one file that must be rewritten |
-| input pipeline: reader thread, resize poll, drain-on-exit, generation-guarded timers | `kmet/tui/core.clj` (§§7, 9) | JVM-bound halves remain |
-| render loop retarget (logic ports; logging to portable I/O) | `kmet/tui/core.clj` (§10) | portable logic, terminal I/O to retarget |
-| mouse tracking | `kmet/libs/terminal.clj` constants are ready | not started |
+- **`kmet.tui.terminal` is protocol + shared logic only.** The platform
+  protocol is lean — `start!` / `stop!` / `started?` / `write-output` /
+  `read-input` / `columns` / `rows` / `set-progress!` — and everything else
+  (cursor/clear/title/move verbs, the Kitty and query wrappers, the drain
+  loop) is derived once, above the backend. `create-terminal` resolves the
+  backend at runtime (`requiring-resolve`), so neither host loads the
+  other's platform deps. The old JLine reach-throughs in `core.clj`
+  (`(.terminal …)`, `(.reader …)`, `.getWidth`/`.getHeight`) and in
+  `modes/interactive.clj` (the `(:writer …)` nil-check) are gone: the
+  reader loop and the render loop speak only to the protocol.
+- **`kmet.tui.terminal-jline`** is the bb/JVM backend — the only namespace
+  importing `org.jline.*`, behavior unchanged (raw mode + timed reads +
+  live size + the stty snapshot workaround).
+- **`kmet.tui.terminal-native`** (`.cljc`, body under one `#?(:jolt …)`
+  branch) is the Jolt backend: termios raw mode (tcgetattr → cfmakeraw →
+  tcsetattr), `poll(2)` + `read(2)` for bounded reads, `ioctl(TIOCGWINSZ)`
+  for the live size, and UTF-8 reassembly across read boundaries via
+  `kmet.libs.terminal/utf8-decode`. Restore runs on `stop!` and on a
+  `Runtime.addShutdownHook` backstop (the classic raw-mode-left-on failure).
+  No subprocesses, no libraries beyond libc. §5 is the reference for the
+  FFI shape; the landed code differs in three places: `TCSANOW` (not
+  `TCSAFLUSH` — flush would discard typed-ahead input at start),
+  `poll` + one 1KB read per pass (not a blocking read per char), and an
+  atomic `claim-restore!` so `stop!` and the shutdown hook can never
+  double-free the saved termios.
+- **Windows is open.** `create-terminal` throws a clear error there;
+  §6 is the design (kernel32 `GetConsoleMode`/`SetConsoleMode` +
+  `ENABLE_VIRTUAL_TERMINAL_INPUT`, `WaitForSingleObject` + `ReadFile`,
+  `GetConsoleScreenBufferInfo` — the same three calls as pi's
+  `win32-platform.c`).
+- **Mouse tracking** is still untracked; the `kmet.libs.terminal` constants
+  are ready.
 
-Concrete failures on Jolt today (`jolt test-ext`), both attributable to the
-missing adapter:
+Verified with the pty scripts (`scripts/pty_capture.py`):
 
-- `kmet.tui.test-render-loop` — **5 tests, 5 errors**
-  (`Unknown class TerminalBuilder`): the suite builds a virtual JLine
-  terminal and drives the private render loop, so it stays red until the
-  adapter exists.
-- `kmet.modes.test-overlay-input-smoke` — **2 failures + 1 error** in a full
-  `jolt test-ext` run (standalone it hangs to the runner's 15 s namespace
-  timeout instead, the error being the interrupting `InterruptedException`):
-  a pty-driven app smoke test where typed text never reaches the editor. It
-  needs the adapter *and* the input pipeline.
+| check | result |
+|---|---|
+| FFI round-trip in a pty | raw size 90×25 via `ioctl`; `read` of `hi👋` → `[104 105 128075]`; cooked restore |
+| `jolt test kmet.libs.test-terminal` | 4 tests / 17 assertions green (decoder) |
+| `jolt test kmet.tui.test-terminal-native` | 1 test / 5 assertions green (tty-free surface) |
+| `jolt test-ext kmet.tui.test-terminal-native` | 1 test / 4 assertions green (nested jolt in a real pty) |
+| `jolt test-ext kmet.tui.test-render-loop` | **5 tests / 30 assertions green — was 5 errors on `Unknown class TerminalBuilder`** (the suite now drives a protocol stub, no JLine) |
+| real kmet TUI on Jolt | `jolt run -m kmet.core` in a pty: renders, `/quit` exits 0, cursor restored (`\u001b[?25h`) |
+| suspend/resume shape | create → raw → read → stop, twice in one process: both rounds read their input |
 
-The rest of the TUI test suite — every component test, the frame-scheduling
-and reactivity suites, utils/keys/negotiation — is green on Jolt. `bb
-test-ext` is fully green; these two are Jolt-only.
+Follow-ups: re-verify on Termux/bionic (this run was glibc/WSL2;
+`cfmakeraw` exists in bionic but confirm on device), Windows (§6), and a
+Jolt-host variant of the pty app smoke (the existing
+`modes.test-overlay-input-smoke` spawns `bb run`, and its ~20 s of stages
+exceed the Jolt runner's 15 s per-namespace timeout — `kmet.runner`).
+Known divergences from the JLine backend: it uses stdin/stdout directly
+(pi does the same — JLine instead opens the system terminal, so a
+redirected stdout would still reach `/dev/tty` there), and it registers
+one shutdown hook per suspend/resume cycle (each a no-op once its
+terminal stopped; bounded by user actions).
+
+**`jolt test-ext` red-set correction (this doc had it wrong).**
+`kmet.modes.test-overlay-input-smoke` is *not* blocked by the adapter: the
+test spawns a hardcoded `bb run` through a pty, so on the Jolt host it
+exercises bb's TUI, not Jolt's. It fails because its stages need ~20s while
+the Jolt runner kills each namespace after 15s (`kmet.runner`: `deref f
+15000`). Not a terminal gap. The one real Jolt-red TUI suite was
+`kmet.tui.test-render-loop`, now green.
+
+### The portable core (verified 2026-09-10, unchanged)
+
+`jolt test` is green (2032 tests / 13803 assertions, `jolt
+v0.8.6-18-g64bdeff4`): `kmet.libs.reakt`, `kmet.tui.{hiccup,macros,
+protocols,keys,keybindings,utils,theme,border,timers}`, all 21
+`kmet.tui.components.*` and the `kmet.app.ui.*` layer above them run on Jolt
+as-is — nothing there imports JLine or any other JVM-only class. The
+headless surface (`hiccup/render-lines`, `core/render`) is what the tests
+drive, so steps 2–3 of §13 below were already done, and §10's "port"
+column for the whole component set means *no work required*.
+
+### History — what this file was written for
+
+The sections below (§§1–9, 11–12, 14) are the design + reference material
+for the port: architecture mapping (§1), the JLine surface being replaced
+(§2), rendering (3), the FFI ground rules (§4 — worth reading before any
+binding), raw mode Unix/Windows (§§5–6), the input pipeline (§7), key
+parsing (§8), concurrency/host-shims (§9), what ports unchanged (§10),
+packaging (§11), a sketch (§12), next steps (§13) and the evaluated-and-
+rejected babashka.ffi variant (§14). The §§4–6 FFI notes were confirmed
+against the real jolt checkout while implementing; the three deltas listed
+above are the only places the landed code deviates from the samples.
 
 ---
 
@@ -75,23 +133,29 @@ pi-tui / kmet separate three concerns. Only the third changes per platform:
 | rendering | ANSI escapes to stdout | same — pure Clojure | same — port as-is |
 | key parsing | `parseKey`, Kitty + legacy tables | `tui/keys.clj`, 0 Java interop | port verbatim |
 | protocol knowledge | `terminal.ts` constants + negotiation | `libs/terminal.clj`, pure | port verbatim |
-| raw mode + I/O | `stdin.setRawMode` + libuv | **JLine** (`tui/terminal.clj`) | **termios FFI** (Unix) + **kernel32 FFI** (Windows) |
+| raw mode + I/O | `stdin.setRawMode` + libuv | **JLine** (`terminal_jline.clj`) | **termios FFI** (`terminal_native.cljc`, Unix) + **kernel32 FFI** (Windows, open) |
 | Windows VT input | `win32-console-mode.node` (`GetConsoleMode`/`SetConsoleMode` + `ENABLE_VIRTUAL_TERMINAL_INPUT`) | free via JLine | `defcfn` to `kernel32.dll` — same three calls |
 
-kmet already enforces this split: raw `\u001b` is banned outside `src/kmet/tui/`
+kmet enforces this split: raw `\u001b` is banned outside `src/kmet/tui/`
 and `src/kmet/libs/terminal.clj`, and the `ITerminal` protocol
-(`terminal.clj:13`) is the sole seam between the portable core and the OS.
-A port rewrites one ~240-line adapter and keeps ~12k lines of
-`reakt` + `hiccup` + components + `utils` + `keys` + `libs.terminal`.
+(`terminal.clj`) is the sole seam between the portable core and the OS —
+since the 2026-09-11 refactor it is a *total* seam (nothing outside a
+backend touches a backend's private state), so a backend swap touches no
+core code. The port kept ~12k lines of `reakt` + `hiccup` + components +
+`utils` + `keys` + `libs.terminal` and replaced the ~240-line adapter
+with two backends behind the protocol.
 
 ---
 
 ## 2. Why kmet uses JLine, and what "replace with raw mode" means
 
 In kmet, JLine **is** raw mode plus portable I/O around it.
-`terminal.clj:60` is literally `(.enterRawMode t)`. Nothing else from JLine
-is used — no `LineReader`, no completion; the editor is custom
-(`tui/components/editor.clj`). The full used surface:
+`terminal_jline.clj` is literally `(.enterRawMode t)`. Nothing else from
+JLine is used — no `LineReader`, no completion; the editor is custom
+(`tui/components/editor.clj`). This holds for the bb/JVM backend only: the
+Jolt backend (`terminal_native.cljc`) supplies the same primitive set
+(raw on/off, bounded reads, live size, writes) through libc. The full
+surface the bb backend takes from JLine:
 
 - **raw on/off + handle acquire**: `.enterRawMode`, `.reader`/`.writer`,
   `.close` (`terminal.clj:55-75`).
@@ -129,9 +193,9 @@ the bb default — bundled 4.3.1, zero packaging cost, and the baud-`0` +
 aarch64 close-deadlock workarounds already hold. `babashka.ffi` can express
 the same §§4–6 bindings (translation in §14), but replacing JLine with it
 is rejected: same ~1wk Unix + 2–4wk Windows effort as the Jolt adapter for
-zero gain. If built at all, it is an opt-in `FfiTerminal` *alongside*
-`JLineTerminal` behind `ITerminal` (Unix first), as a Jolt-port validation
-rig — never a deletion until Windows parity + a release of soak.
+zero gain. The "opt-in FFI terminal alongside JLine as a port-validation
+rig" this predicted is exactly what landed (2026-09-11): the FFI backend
+is Jolt-only, behind the same protocol, and bb never loads it.
 
 ---
 
@@ -626,8 +690,8 @@ mechanism — timers stay `future` + generation counters.
 | `libs.terminal` (Kitty/OSC constants, negotiation + response parsing) | port logic verbatim; `Base64` shimmed (keep or use `ffi/write-bytes`); log-file names need no `LocalDateTime` (format manually or drop the timestamp) |
 | `tui.keys`, `tui.keybindings`, `tui.utils` (width/wrap/truncate), `libs.reakt`, `tui.hiccup`, `tui.macros`, `tui.protocols`, `tui.border`, `tui.timers`, all `tui.components.*` | **already green on Jolt, unchanged** (§0) — the `add-watch`-on-atom and regex spots checked out; `test-border`/`test-timers`/`test-hiccup`/`test-track`/`test-reakt-integration` run as-is |
 | `tui.theme` | portable — already polls (`theme.clj:625-647`: "babashka.fs has no watcher"); keep the poll, keep `java.nio` out per the AGENTS.md rule |
-| `tui.terminal` (240 lines) | **rewrite** per §§4–6 behind the same `ITerminal` protocol |
-| `tui.core` input half + start/stop/resize/drain | **reimplement** per §§5–7,9 (reader thread, poll-based resize, generation-guarded timers, restores) |
+| `tui.terminal` (240 lines) | **rewrite** per §§4–6 behind the same `ITerminal` protocol — **done 2026-09-11**: the protocol is now lean and total, the JLine half moved to `terminal_jline.clj`, and the Jolt half is `terminal_native.cljc` (Unix; Windows open) |
+| `tui.core` input half + start/stop/resize/drain | **reimplement** per §§5–7,9 (reader thread, poll-based resize, generation-guarded timers, restores) — **done**: the reader loop calls `read-input` and the loop polls `columns`/`rows`; no JLine types remain in `core.clj` |
 | `tui.core` render half (diff, overlays, flashes, Kitty-image ranges, crash/debug logs) | port logic; retarget logging to portable I/O |
 
 Suggested order (revised in §0 — the headless half is already green):
@@ -726,13 +790,17 @@ re-runs (`hiccup/render-lines`, no tty, no sleeps).
    **Done, and better than planned**: no porting was needed — the whole
    component set and the headless render surface run on Jolt as-is (§0).
 4. Build the `ITerminal` adapter (§§5–6), then the §7 input pipeline.
-   This unblocks the red `test-render-loop` set (§0).
+   This unblocks the red `test-render-loop` set (§0). **Done 2026-09-11
+   (Unix)** — both the render-loop suite and the new native pty test are
+   green on Jolt; Windows (§6) remains.
 5. Retarget the render loop's terminal I/O — overlays, focus/modality and
    the diff logic are already portable (§10); drain-on-exit and the
-   size/timer plumbing are the JVM-bound halves.
+   size/timer plumbing are the JVM-bound halves. **Done** — `core.clj`
+   reads `columns`/`rows`, times out `read-input`, and drains through the
+   protocol.
 6. **Widget library: done** (input/editor/select/settings lists are green
    on Jolt — §0). Remaining here: mouse tracking (`libs.terminal`
-   constants already cover the protocol).
+   constants already cover the protocol) and the Windows backend.
 
 ---
 

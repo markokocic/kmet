@@ -40,7 +40,9 @@
   runner; `bb test-changed` prints a hint instead of silently skipping them.
 - **Deps**: first-party Babashka libraries (`babashka.fs`, `babashka.process`) in `deps.edn`;
   tooling deps (`cljfmt`) in `bb.edn` `:deps`; JLine **4.3.1** bundled with Babashka (see
-  babashka `deps.edn`: `org.jline/jline-terminal`, `org.jline/jline-reader`).
+  babashka `deps.edn`: `org.jline/jline-terminal`, `org.jline/jline-reader`) as the
+  bb/JVM terminal backend — the Jolt terminal backend uses no dependency: termios /
+  kernel32 through `jolt.ffi`.
 - **Packaging** (`kmet.build`): `bb uberjar` → `target/kmet.jar` (src + resolved dep jars,
   only `borkdude/deps.clj` isn't bb-builtin); `bb build [targets|--all] [--force] [--no-smoke]`
   → self-contained executables in `dist/` (official bb release binary + appended uberjar;
@@ -120,6 +122,10 @@ src/kmet/
 └── tui/      — Generic TUI library (Pi's @earendil-works/pi-tui)
     │           Usage docs: src/kmet/tui/tui.md — MUST be kept up to date
     │           with any behavior change they describe
+    │           terminal.clj = the ITerminal protocol + shared ANSI/query
+    │           logic + host dispatch; terminal_jline.clj (bb/JVM) and
+    │           terminal_native.cljc (Jolt termios/kernel32 FFI) are the only
+    │           namespaces that touch platform deps
     └── components/ — TUI leaf components (Container, Box, Text, ...)
 
 extensions/ — Shipped opt-in extensions (single .clj files or manifest dirs;

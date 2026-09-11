@@ -1,6 +1,7 @@
 (ns kmet.tui.test-render-loop
-  "Render-loop tests over a virtual terminal (a forced-dumb JLine terminal,
-   80x24, every write recorded). Covers the full-redraw clearing contract:
+  "Render-loop tests over a virtual terminal (a protocol stub, 80x24, every
+   write recorded — no JLine, no real tty). Covers the full-redraw clearing
+   contract:
 
    - a full redraw re-emits the whole transcript, so it must clear the
      scrollback too (\\u001b[3J) or the re-emit appends after the old
@@ -17,8 +18,7 @@
   (:require [clojure.string :as str]
             [clojure.test :as t :refer [deftest testing]]
             [kmet.tui.core :as core]
-            [kmet.tui.terminal :as term])
-  (:import (org.jline.terminal TerminalBuilder Size)))
+            [kmet.tui.terminal :as term]))
 
 (def ^:private clear-seq
   "The clear sequence a clearing full redraw must emit: erase screen, home,
@@ -39,32 +39,26 @@
 
 ;; ─── Virtual terminal ──────────────────────────────────────────────────────
 
-(defrecord VirtualTerminal [terminal writes]
+(defrecord VirtualTerminal [size writes]
   term/ITerminal
   (start! [this _ _] this)
   (stop! [_] nil)
+  (started? [_] true)
   (write-output [_ s] (swap! writes conj s))
-  (columns [this] (.getWidth (:terminal this)))
-  (rows [this] (.getHeight (:terminal this)))
-  (hide-cursor! [this] (term/write-output this "\u001b[?25l"))
-  (show-cursor! [this] (term/write-output this "\u001b[?25h"))
-  (clear-line! [_] nil)
-  (clear-screen! [_] nil)
-  (set-title! [_ _] nil)
-  (move-by! [_ _] nil)
-  (clear-from-cursor! [_] nil)
+  (read-input [_ _] -1)
+  (columns [_] (:cols @size))
+  (rows [_] (:rows @size))
   (set-progress! [_ _] nil))
 
 (defn- make-virtual-terminal
-  "A virtual terminal: a forced-dumb JLine terminal (80x24) with every
-   write recorded in an atom. Dumb is forced so the test never touches the
-   real controlling terminal, even when the suite runs interactively."
+  "A virtual terminal: protocol stub at 80x24 with every write recorded in
+   an atom and a mutable size (resize the test by swapping the size atom)."
   []
-  (let [jline (-> (TerminalBuilder/builder) (.dumb true) (.build))]
-    (.setSize jline (Size. 80 24))
-    (let [writes (atom [])]
-      {:terminal (map->VirtualTerminal {:terminal jline :writes writes})
-       :writes writes})))
+  (let [writes (atom [])
+        size (atom {:cols 80 :rows 24})]
+    {:terminal (map->VirtualTerminal {:size size :writes writes})
+     :size size
+     :writes writes}))
 
 (defn- test-component
   "IComponent rendering the strings in LINES (an atom)."
@@ -196,14 +190,14 @@
           (stop-loop tui))))))
 
 (deftest ^:slow terminal-resize-triggers-full-redraw
-  (testing "a terminal resize re-renders without any input event: JLine's native WINCH
-            handler is dead under the GraalVM native image, so the loop must detect
+  (testing "a terminal resize re-renders without any input event: the JLine backend's
+            native WINCH handler is dead under the GraalVM native image, so the loop must detect
             the size change itself and reflow (pi: terminal.on('resize') → requestRender).
             Without this the editor keeps wrapping at the pre-resize width."
     (let [lines (atom ["alpha" "beta"])
           vt (make-virtual-terminal)
           tui (core/create-tui (:terminal vt))
-          jline (:terminal (:terminal vt))]
+          size (:size vt)]
       (try
         (core/tui-add-child tui (test-component lines))
         (start-loop tui)
@@ -211,7 +205,7 @@
         (t/is (= 80 @(:previous-width tui)) "rendered at the initial 80 cols")
         ;; Resize the terminal WITHOUT requesting a render — the loop's own
         ;; size poll must notice and reflow.
-        (.setSize jline (Size. 60 24))
+        (swap! size assoc :cols 60)
         (wait-for-frames (:writes vt) 2 2000)
         (let [frame (second (frame-writes (:writes vt)))]
           (t/is (some? frame) "a new frame was rendered after the resize")
@@ -224,7 +218,7 @@
         ;; depends on the diff (Termux: height changes take the diff path, so
         ;; unchanged content emits nothing) — the render itself is observable
         ;; via the diff-state update.
-        (.setSize jline (Size. 60 30))
+        (swap! size assoc :rows 30)
         (let [deadline (+ (System/currentTimeMillis) 2000)]
           (loop []
             (when (and (< (System/currentTimeMillis) deadline)

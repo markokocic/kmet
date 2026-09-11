@@ -1,141 +1,91 @@
 (ns kmet.tui.terminal
-  "JLine 4.x terminal wrapper (Babashka bundles JLine 4.3.1).
-   Port of @earendil-works/pi-tui ProcessTerminal — the adapter half only:
-   the ITerminal abstraction over JLine. The portable protocol knowledge
-   (Kitty keyboard negotiation, escape sequences, write log) lives in
-   kmet.libs.terminal; the fns below are thin record-taking wrappers over
-   it (write-fn based), plus the JLine-reader drain loop."
-  (:require [kmet.libs.terminal :as lib]
-            [clojure.string :as str]))
+  "Terminal backend abstraction: the ITerminal protocol plus the portable
+   terminal knowledge every backend shares.
 
-(import '(org.jline.terminal TerminalBuilder Terminal))
+   The TUI core reaches the OS only through ITerminal. A backend supplies
+   the platform primitives — raw mode, writing, bounded reads, live size,
+   the progress keepalive; everything else (cursor/clear/title sequences,
+   write log, Kitty negotiation, terminal queries, drain-on-exit) is
+   derived here or in kmet.libs.terminal. Backends are resolved lazily by
+   create-terminal, so neither host touches the other's platform deps:
+
+   - kmet.tui.terminal-jline  — Babashka/JVM: JLine 4.3.1 (bundled).
+   - kmet.tui.terminal-native — Jolt: termios (Unix) / kernel32 (Windows)
+     raw mode, byte reads and live size over jolt.ffi.
+
+   A backend record owns its private state (reader/writer, raw-mode
+   snapshot, progress interval atom); nothing outside the backend reads
+   those fields."
+  (:require [kmet.libs.terminal :as lib]))
+
+;; ─── The protocol: platform primitives only ────────────────────────────────
 
 (defprotocol ITerminal
   (start! [this on-input on-resize] "Enter raw mode, start reading input")
-  (stop! [this] "Restore terminal, clean up")
-  (write-output [this s] "Write text to terminal")
-  (columns [this] "Terminal width in columns")
-  (rows [this] "Terminal height in rows")
-  (hide-cursor! [this])
-  (show-cursor! [this])
-  (clear-line! [this])
-  (clear-screen! [this])
-  (set-title! [this title] "Set the terminal window title (OSC 0)")
-  (move-by! [this lines] "Move cursor up (negative) or down (positive) by N lines")
-  (clear-from-cursor! [this] "Clear from cursor to end of screen")
+  (stop! [this] "Restore the terminal (raw mode off) and release resources")
+  (started? [this] "True once start! entered raw mode — writes are live")
+  (write-output [this s] "Write text to the terminal and flush")
+  (read-input [this timeout-ms]
+    "Read one char, waiting at most TIMEOUT-MS. Returns the char code, or a
+     negative value when no input arrived (the JLine NonBlockingReader
+     contract: 0..0x10FFFF on data, negative on timeout/partial sequence).")
+  (columns [this] "Live terminal width in columns")
+  (rows [this] "Live terminal height in rows")
   (set-progress! [this active] "Show/hide the terminal progress indicator (OSC 9;4)"))
 
-(defn- run-stty
-  "Run `stty` with inherited stdin so it sees the controlling terminal
-   (Java's default pipe-redirect hides it). Returns trimmed stdout, or nil
-   when stty is unavailable or fails (Windows, non-tty stdin, ...). The
-   stream read is bounded — a hung stty must never block startup or exit."
-  [& args]
-  (try
-    (let [pb (ProcessBuilder. (into-array String (cons "stty" args)))
-          _ (.redirectInput pb java.lang.ProcessBuilder$Redirect/INHERIT)
-          _ (.redirectErrorStream pb true)
-          p (.start pb)
-          out (deref (future (slurp (.getInputStream p))) 2000 nil)]
-      (when out
-        (.waitFor p)
-        (let [out (str/trim out)]
-          (when (seq out) out))))
-    (catch Exception _ nil)))
+;; ─── Portable ANSI verbs (identical for every backend) ─────────────────────
 
-(defn- capture-stty-snapshot
-  "The full `stty -g` saved-state string of the current terminal, or nil."
+(defn hide-cursor! [terminal] (write-output terminal "\u001b[?25l"))
+(defn show-cursor! [terminal] (write-output terminal "\u001b[?25h"))
+(defn clear-line! [terminal] (write-output terminal "\u001b[2K"))
+(defn clear-screen! [terminal] (write-output terminal "\u001b[2J\u001b[H"))
+(defn set-title! [terminal title] (write-output terminal (str "\u001b]0;" title "\u0007")))
+(defn move-by! [terminal lines]
+  (cond
+    (pos? lines) (write-output terminal (str "\u001b[" lines "B"))
+    (neg? lines) (write-output terminal (str "\u001b[" (- lines) "A"))
+    :else nil))
+(defn clear-from-cursor! [terminal] (write-output terminal "\u001b[J"))
+
+(defn apply-progress!
+  "Shared OSC 9;4 body for a backend's set-progress! method: writes the
+   active/clear sequence and owns the keepalive future held in
+   INTERVAL-ATOM (some terminals drop the indicator without periodic
+   re-assertion — pi: setInterval keepalive)."
+  [terminal interval-atom active]
+  (if active
+    (do (write-output terminal lib/TERMINAL-PROGRESS-ACTIVE-SEQUENCE)
+        (when (nil? @interval-atom)
+          (reset! interval-atom
+                  (future
+                    (try
+                      (loop []
+                        (Thread/sleep lib/TERMINAL-PROGRESS-KEEPALIVE-MS)
+                        (when @interval-atom
+                          (write-output terminal lib/TERMINAL-PROGRESS-ACTIVE-SEQUENCE)
+                          (recur)))
+                      (catch InterruptedException _))))))
+    (do (when-let [f @interval-atom]
+          (future-cancel f)
+          (reset! interval-atom nil))
+        (write-output terminal lib/TERMINAL-PROGRESS-CLEAR-SEQUENCE))))
+
+;; ─── Backend dispatch ──────────────────────────────────────────────────────
+
+(defn- jolt-host?
+  "True on the Jolt host: jolt defines clojure.core/*jolt-version*
+   (jolt-port.md); babashka/JVM does not."
   []
-  (run-stty "-g"))
+  (boolean (find-var 'clojure.core/*jolt-version*)))
 
-(defrecord JLineTerminal [^Terminal terminal ^java.io.Reader reader ^java.io.Writer writer
-                          input-handler resize-handler running? progress-interval-atom
-                          stty-snapshot-atom]
-
-  ITerminal
-  (start! [this on-input on-resize]
-    (let [t (:terminal this)
-          r (.reader t)
-          w (.writer t)]
-      (.enterRawMode t)
-      (.write w lib/BRACKETED-PASTE-ON)
-      (.flush w)
-      (assoc this :reader r :writer w
-             :input-handler on-input
-             :resize-handler on-resize
-             :running? true)))
-
-  (stop! [this]
-    (when (:running? this)
-      (try
-        (when-let [w (:writer this)]
-          (.write w lib/BRACKETED-PASTE-OFF)
-          (.flush w))
-        (finally
-          (.close (:terminal this))))
-      ;; Re-apply the pre-raw-mode terminal state. JLine's own restore
-      ;; misses the baud rate (see create-terminal) and may leave speed 0.
-      (when-let [snapshot @(:stty-snapshot-atom this)]
-        (run-stty snapshot))
-      (assoc this :running? false)))
-
-  (write-output [this s]
-    (when-let [w (:writer this)]
-      (.write w s)
-      (.flush w)
-      (lib/write-log! s)))
-
-  (columns [this] (.getWidth (:terminal this)))
-  (rows [this] (.getHeight (:terminal this)))
-  (hide-cursor! [this] (write-output this "\u001b[?25l"))
-  (show-cursor! [this] (write-output this "\u001b[?25h"))
-  (clear-line! [this] (write-output this "\u001b[2K"))
-  (clear-screen! [this] (write-output this "\u001b[2J\u001b[H"))
-  (set-title! [this title] (write-output this (str "\u001b]0;" title "\u0007")))
-  (move-by! [this lines]
-    (cond
-      (pos? lines) (write-output this (str "\u001b[" lines "B"))
-      (neg? lines) (write-output this (str "\u001b[" (- lines) "A"))
-      :else nil))
-  (clear-from-cursor! [this] (write-output this "\u001b[J"))
-  (set-progress! [this active]
-    (if active
-      (do (write-output this lib/TERMINAL-PROGRESS-ACTIVE-SEQUENCE)
-          (when (nil? @(:progress-interval-atom this))
-            ;; Keepalive: some terminals drop the progress indicator without
-            ;; periodic re-assertion (pi: setInterval keepalive)
-            (reset! (:progress-interval-atom this)
-                    (future
-                      (try
-                        (loop []
-                          (Thread/sleep lib/TERMINAL-PROGRESS-KEEPALIVE-MS)
-                          (when @(:progress-interval-atom this)
-                            (write-output this lib/TERMINAL-PROGRESS-ACTIVE-SEQUENCE)
-                            (recur)))
-                        (catch InterruptedException _))))))
-      (do (when-let [f @(:progress-interval-atom this)]
-            (future-cancel f)
-            (reset! (:progress-interval-atom this) nil))
-          (write-output this lib/TERMINAL-PROGRESS-CLEAR-SEQUENCE)))))
-
-(defn create-terminal []
-  (let [;; JLine's FFM termios mapping (FfmUnixSysTerminal on aarch64 Linux)
-        ;; writes a baud rate of 0 the moment the terminal is constructed —
-        ;; capture the cooked-state `stty -g` snapshot BEFORE that, so stop!
-        ;; can restore the real speed (and flags) after JLine's own restore.
-        snapshot (capture-stty-snapshot)
-        t (TerminalBuilder/terminal)]
-    (map->JLineTerminal {:terminal t
-                         :progress-interval-atom (atom nil)
-                         :stty-snapshot-atom (atom snapshot)})))
-
-(defn create-dumb-terminal []
-  (let [snapshot (capture-stty-snapshot)
-        t (TerminalBuilder/terminal
-           (into-array Object ["dumb" true "system" false]))]
-    (map->JLineTerminal {:terminal t
-                         :progress-interval-atom (atom nil)
-                         :stty-snapshot-atom (atom snapshot)})))
+(defn create-terminal
+  "Create the host's terminal backend. The backend namespace is resolved at
+   call time, so the JLine backend never loads on Jolt (no org.jline.*) and
+   the FFI backend never loads on bb/JVM (no jolt.ffi)."
+  []
+  (if (jolt-host?)
+    ((requiring-resolve 'kmet.tui.terminal-native/create-terminal))
+    ((requiring-resolve 'kmet.tui.terminal-jline/create-terminal))))
 
 ;; ─── Kitty protocol wrappers (lib fns bound to this terminal's writer) ─────
 
@@ -166,22 +116,19 @@
 (defn drain-input!
   "Disable the keyboard protocols and drain pending input so late key
    release sequences do not leak to the parent shell (pi: drainInput —
-   max 1000ms, exits after 50ms of input idle). The drain loop is
-   JLine-reader specific; the protocol disable is the lib's."
+   max 1000ms, exits after 50ms of input idle). Backend-neutral: pulls
+   through the protocol's bounded read-input."
   [terminal]
   (lib/disable-kitty-protocol! (write-fn terminal))
-  (let [reader (:reader terminal)
-        max-ms 1000
+  (let [max-ms 1000
         idle-ms 50]
     (loop [last-read (System/nanoTime)
            waited 0]
       (when (and (< waited max-ms)
                  (< (- (System/nanoTime) last-read) (* idle-ms 1000000)))
-        (if (and reader (.ready reader))
-          (do (.read reader)
-              (recur (System/nanoTime) 0))
-          (do (Thread/sleep 10)
-              (recur last-read (+ waited 10)))))))
+        (if (>= (read-input terminal 10) 0)
+          (recur (System/nanoTime) 0)
+          (recur last-read (+ waited 10))))))
   nil)
 
 ;; ─── Terminal queries (pi: terminal.ts / tui.ts) ───────────────────────────

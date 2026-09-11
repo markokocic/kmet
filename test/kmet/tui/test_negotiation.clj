@@ -21,16 +21,11 @@
   (reify term/ITerminal
     (start! [_ _ _] nil)
     (stop! [_] nil)
+    (started? [_] true)
     (write-output [_ _] nil)
+    (read-input [_ _] -1)
     (columns [_] 80)
     (rows [_] 24)
-    (hide-cursor! [_] nil)
-    (show-cursor! [_] nil)
-    (clear-line! [_] nil)
-    (clear-screen! [_] nil)
-    (set-title! [_ _] nil)
-    (move-by! [_ _] nil)
-    (clear-from-cursor! [_] nil)
     (set-progress! [_ _] nil)))
 
 (defn- reset-protocol-state!

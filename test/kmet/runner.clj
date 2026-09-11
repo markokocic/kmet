@@ -119,9 +119,11 @@
     kmet.tui.test-negotiation
     kmet.tui.test-terminal-response
     kmet.tui.test-render-loop
+    kmet.tui.test-terminal-native
     kmet.libs.test-self-contained
     kmet.libs.test-crypto
     kmet.libs.test-sse
+    kmet.libs.test-terminal
     kmet.libs.test-terminal-image
     kmet.libs.test-yaml
     kmet.libs.test-markdown

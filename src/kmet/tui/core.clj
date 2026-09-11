@@ -1410,12 +1410,11 @@
     (str out)))
 
 (defn- start-input-reader [tui]
-  (let [jline (.terminal @(:terminal tui))
-        reader (.reader jline)
-        read-fn (fn [timeout-ms] (.read reader timeout-ms))]
-    ;; Track the current reader so a stale reader (from a suspended TUI
-    ;; session) exits as soon as a fresh reader is installed by resume.
-    (reset! (:current-reader tui) reader)
+  (let [term @(:terminal tui)
+        read-fn (fn [timeout-ms] (terminal/read-input term timeout-ms))]
+    ;; Track the current terminal so a stale reader (from a suspended TUI
+    ;; session) exits as soon as a fresh backend is installed by resume.
+    (reset! (:current-reader tui) term)
     (let [f (future
               (let [buf (atom "")
                     ;; [timestamp char] pairs of recently read chars, pruned
@@ -1425,15 +1424,16 @@
                     recent-chars (atom [])
                     swallow-lf (atom nil)]
                 (while (and @(:running? tui) (not @(:stopped? tui))
-                            (identical? reader @(:current-reader tui)))
+                            (identical? term @(:current-reader tui)))
                   (try
                     ;; Bounded read: data arrives immediately, but the idle
                     ;; timeout lets the loop re-check the stop conditions and
-                    ;; lets terminal close() proceed promptly. A blocking
-                    ;; read here deadlocks JLine's FFM terminal close on
-                    ;; aarch64 Linux (jline3 #1909 — close waits for the
-                    ;; in-flight read; the FFM pump thread never wakes it).
-                    (let [ch (.read reader 100)]
+                    ;; lets the backend's close/restore proceed promptly. A
+                    ;; blocking read here deadlocks JLine's FFM terminal close
+                    ;; on aarch64 Linux (jline3 #1909 — close waits for the
+                    ;; in-flight read; the FFM pump thread never wakes it); the
+                    ;; native backend's poll(read) honors the same bound.
+                    (let [ch (terminal/read-input term 100)]
                       (when (>= ch 0)
                         ;; Drain everything ALREADY QUEUED behind the first
                         ;; char (pi: stdin 'data' events deliver chunks, not
@@ -1450,7 +1450,7 @@
                         ;; simply finishes on the next loop iteration.
                         (let [batch (loop [acc (doto (StringBuilder.)
                                                  (.append (char ch)))]
-                                      (let [more (.read reader 1)]
+                                      (let [more (terminal/read-input term 1)]
                                         (if (>= more 0)
                                           (recur (.append acc (char more)))
                                           (str acc))))]
@@ -1491,7 +1491,7 @@
                                 (println "input:" (ex-message e))))))))
                     (catch Exception e
                       (when (and @(:running? tui)
-                                 (identical? reader @(:current-reader tui)))
+                                 (identical? term @(:current-reader tui)))
                         (binding [*out* *err*]
                           (println "input:" (ex-message e)))))))))]
       (reset! (:input-reader tui) f))))
@@ -1613,7 +1613,6 @@
   (let [started (terminal/start! @(:terminal tui)
                                  (fn [_] nil)
                                  (fn [] (tui-request-render tui)))
-        jline (.terminal started)
         hardware-cursor-row (atom 0)
         previous-viewport-top (atom 0)]
     ;; Make the started record (with the live writer) visible to the input
@@ -1639,8 +1638,8 @@
     (try
       (loop []
         (when @(:running? tui)
-          (let [w (.getWidth jline)
-                h (.getHeight jline)]
+          (let [w (terminal/columns started)
+                h (terminal/rows started)]
             ;; Loop-owned timers (tui.md §6.1): fire whatever is due
             ;; BEFORE the flush, so an atom a thunk just mutated is brought
             ;; current in this same tick. Thunks run here, on the loop
@@ -1653,14 +1652,14 @@
             ;; invalidate their subscribers' caches before the render gate
             ;; below reads them.
             (reakt/flush!)
-            ;; Terminal resize detection. JLine's native WINCH handling does
-            ;; not work under babashka's GraalVM native image (no native
-            ;; signal handlers are registered), so the on-resize callback is
-            ;; never invoked and nothing re-renders on resize — the editor
-            ;; keeps wrapping at the pre-resize width until the next input
-            ;; event (pi: terminal.on("resize") → requestRender).
-            ;; getWidth/getHeight are live terminal queries, so polling them
-            ;; here (16ms cadence) catches the change reliably; the existing
+            ;; Terminal resize detection. The JLine backend's native WINCH
+            ;; handling does not work under babashka's GraalVM native image
+            ;; (no native signal handlers are registered), so its on-resize
+            ;; callback is never invoked and nothing re-renders on resize —
+            ;; the editor keeps wrapping at the pre-resize width until the
+            ;; next input event (pi: terminal.on("resize") → requestRender).
+            ;; columns/rows are live backend queries, so polling them here
+            ;; (16ms cadence) catches the change reliably; the existing
             ;; width-changed/height-changed logic then does the full redraw.
             (when (and (pos? @(:previous-width tui)) (not= @(:previous-width tui) w))
               (tui-request-render tui))
