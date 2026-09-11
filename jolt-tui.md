@@ -720,13 +720,13 @@ re-runs (`hiccup/render-lines`, no tty, no sleeps).
   **Verified 2026-09-11: `jolt build -m kmet.core` produces a working TUI
   binary on Unix** — the native FFI terminal (raw mode, reads, size,
   bracketed paste) works inside the AOT image, and the model catalogs load
-  from the embedded resources. One build hazard to know: **JOLT-13**
-  ([jolt#944](https://github.com/jolt-lang/jolt/issues/944)) — with the `io.github.jolt-lang/time` git dep on the
+  from the embedded resources. One build hazard to know: with the `io.github.jolt-lang/time` git dep on the
   classpath, a built binary dies at startup on
   `unbound fn jolt.time.impl/register-type!` unless the build's analysis
-  resolves a gitlib-only `java.time` class in-process; kmet's graph
-  currently does, and an early `(:require [jolt.time])` in the entry
-  namespace is the workaround if that ever stops being true.
+  resolves a gitlib-only `java.time` class in-process (open upstream — see
+  `jolt-bugs.md`); kmet's graph currently does, and an early
+  `(:require [jolt.time])` in the entry namespace is the workaround if that
+  ever stops being true.
 - `jolt-lang/glimmer-tui` (evaluated 2026-09-06): the one Jolt terminal lib
   — terminal backend for `glimmer`, painting through `ncursesw` via
   `jolt.ffi` (ncurses 6.0 subset only; Unix-only per its `:jolt/native`

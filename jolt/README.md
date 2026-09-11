@@ -18,7 +18,7 @@ missing without this provider — a bare `(java.util.Base64/getMimeDecoder)`
 answers `No matching field or method: java.util.Base64/getMimeDecoder` and
 a bare `(java.net.http.HttpTimeoutException. "x")` answers
 `No matching ctor found for class java.net.http.HttpTimeoutException` — so
-the lib stays as is.
+the lib stays as is (open upstream gaps: `jolt-bugs.md`).
 
 ## No `jolt.crypto` require (dropped 2026-09-10)
 
@@ -70,7 +70,7 @@ with no guard at all.
 | class/member | notes |
 |---|---|
 | `java.util.Base64/getMimeDecoder` | PEM bodies carry newlines; jolt's basic decoder rejects them. MIME rules: discard every non-alphabet char, decode 4→3. Returns the same `[B` type core's decoder returns. |
-| `java.net.http.HttpTimeoutException` ctor | class modelled, no ctor registered. `jolt.host/throwable` builds a host throwable answering `(class e)`/`ex-message` like the JDK's — all kmet's transport-error classifier reads. |
+| `java.net.http.HttpTimeoutException` ctor | class modelled, no ctor registered (open upstream gap — `jolt-bugs.md`). `jolt.host/throwable` builds a host throwable answering `(class e)`/`ex-message` like the JDK's — all kmet's transport-error classifier reads. |
 
 ## Done upstream / in kmet (2026-09-10)
 
