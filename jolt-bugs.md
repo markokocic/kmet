@@ -14,7 +14,30 @@ Historical labels from the deleted `bb-jolt.md` map as: `JOLT-12`→#947,
 
 ## Open
 
-None.
+### Type hints on JDK classes Jolt does not supply fail the extension load
+
+**Area:** SCI interop / class graph
+
+An interpreted source that carries a SHORT type hint naming a JDK class
+Jolt's class graph does not model — the lsp-adapter's `^StringBuilder` is
+the first hit — fails analysis with Jolt's own
+
+```
+No dependency provides java.lang.StringBuilder — a concrete implementation
+of the JDK classes must be provided. A library supplies one by declaring
+:jolt/provides in its deps.edn (RFC 0014).
+```
+
+instead of a "no such class" error. Without the hint the same code runs
+(the instance path is dynamic). The extension loader registers hinted names
+through `bb-imports` + `Class/forName` + `sci/add-class!` under both the
+short and FQ symbol, which is not enough: the message is raised by Jolt's
+analyzer when it resolves the hint, before SCI's class table is consulted
+for the member call.
+
+**Workaround:** none in kmet — the affected shipped extensions load on bb
+only (`test-shipped-extensions-load-from-src` is gated there), and the
+unified loader's core load/unload path is covered on both hosts.
 
 ## Closed — workarounds removed
 
@@ -94,3 +117,4 @@ The 1-arg write dispatches on its argument, so the whole-array overload works.
 `test/kmet/ai/test_llm.clj` are deleted (the test servers write directly); a
 `test/kmet/libs/test_oauth.clj` comment and the `out-write` helper went with
 them.
+

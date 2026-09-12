@@ -25,14 +25,13 @@
    Extensions load at startup (core.clj), are re-loaded by /reload, and can
    be unloaded/reloaded at runtime via unload-extension! /
    reload-extensions!."
-  (:require #?@(:bb [[babashka.classes]])
-            [clojure.java.io :as io]
+  (:require [clojure.java.io :as io]
             [clojure.edn :as edn]
             [clojure.string :as str]
             [babashka.fs :as fs]
             [babashka.process :as proc]
             #?@(:bb [[borkdude.deps :as bdeps]])
-            #?@(:bb [[sci.core :as sci]])
+            [sci.core :as sci]
             [kmet.ai.models :as models]
             [kmet.ai.hooks :as ai-hooks]
             [kmet.app.commands :as commands]
@@ -829,35 +828,100 @@
      edamame.core
      clojure.data.xml})
 
-(def ^:private runtime-classes
-  "Classes that must be registered by their RUNTIME identity: sci resolves
-   instance-method calls against the exact class of the object, and JDK\n   factory methods return internal wrappers (e.g. MessageDigest/getInstance\n   returns a $Delegate$CloneableDelegate) whose names are not loadable via\n   Class/forName under babashka's interceptor. Captured as live Class\n   objects instead — extend when another bundled library needs more."
-  #?(:bb [(class (java.security.MessageDigest/getInstance "SHA-256"))
-          (.getSuperclass (class (java.security.MessageDigest/getInstance "SHA-256")))]
-     :jolt []))
+(defn- jolt?
+  "True on the Jolt host (runtime check, not a reader conditional — the
+   SCI context options below are identical on both hosts except :features)."
+  []
+  (boolean (find-var 'clojure.core/*jolt-version*)))
 
-(defonce ^:private context-classes
-  (let [from-bb #?(:bb (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
-                                     (remove #(str/starts-with? (.getName ^Class %) "[")
-                                             (babashka.classes/all-classes))))
-                   :jolt {})
-        runtime (into {} (map (fn [^Class c] [(symbol (.getName c)) {:class c}])
-                              runtime-classes))]
-    (merge from-bb runtime)))
+(def ^:private missing-classname-re
+  "Matches SCI's analysis error for an unregistered class:
+   `Unable to resolve classname: fq.Name`."
+  #"Unable to resolve classname: (\S+)")
+
+(def ^:private missing-symbol-re
+  "Matches SCI's analysis error for an unresolvable qualified symbol,
+   `Unable to resolve symbol: Qualifier/member`, where the qualifier may
+   itself be dotted: short-name statics surface here (`Thread/sleep` —
+   the analyzer resolves the qualifier through :imports before it ever
+   consults :classes), and so do BARE fully-qualified class names
+   (`java.net.http.HttpTimeoutException` alone, as opposed to
+   `fq.Name/member`), which carry no member part at all."
+  #"Unable to resolve symbol: ([^/\s]+?)(?:/\S+)?$")
+
+(defn- try-add-class!
+  "Class/forName FQ-NAME and register it on CTX via sci/add-class!. True
+   on success; false when the host cannot load the name (ClassNotFound,
+   or a runtime-registered provider class like MessageDigest on Jolt).
+   Both hosts load ordinary JDK classes by name; factory-made runtime
+   classes (MessageDigest delegates) are NOT forName-loadable and stay on
+   the explicit runtime-classes fallback below."
+  [ctx fq-name]
+  (try
+    (sci/add-class! ctx (symbol fq-name) (Class/forName ^String fq-name))
+    true
+    (catch Throwable _ false)))
+
+(defn- try-add-class-short!
+  "Register a bb-imports short name (e.g. StringBuilder) as well as its
+   FQ name. SCI resolves a SHORT type hint (`^StringBuilder`) through
+   class->opts by the short symbol, falling back to the env :imports map
+   — a fallback that is host-dependent. Registering both keys makes
+   short hints resolve identically on bb and Jolt. Returns true when
+   either registration succeeded."
+  [ctx short-sym fq-name]
+  (let [fq-ok? (try-add-class! ctx fq-name)]
+    (when-let [^Class c (try (Class/forName ^String fq-name) (catch Throwable _ nil))]
+      (try (sci/add-class! ctx short-sym c) (catch Throwable _ nil)))
+    fq-ok?))
+
+(def ^:private runtime-classes
+  "Live Class objects for classes Class/forName cannot load: JDK factory
+   methods return internal wrappers (e.g. MessageDigest/getInstance
+   returns a $Delegate$CloneableDelegate) whose names are not loadable.
+   Seeded per context after the bb-imports sweep (try-add-class! covers
+   every ordinary class). Extend when another factory-made class is
+   needed — ordinary classes need no entry here."
+  (delay [(class (java.security.MessageDigest/getInstance "SHA-256"))
+          (.getSuperclass (class (java.security.MessageDigest/getInstance "SHA-256")))]))
 
 (def ^:private tui-library-namespaces
   "The generic TUI layer and the supported app-level tool renderers shared
    with extension contexts. Required once before per-extension contexts are
    built; injected by reference so component and protocol identity is shared."
-  '[kmet.tui.core
-    kmet.tui.theme
-    kmet.tui.keybindings
-    kmet.tui.macros
+  '[kmet.tui.autocomplete
+    kmet.tui.border
+    kmet.tui.core
     kmet.tui.fuzzy
-    kmet.tui.autocomplete
+    kmet.tui.hiccup
+    kmet.tui.keybindings
+    kmet.tui.keys
+    kmet.tui.macros
+    kmet.tui.protocols
+    kmet.tui.theme
+    kmet.tui.timers
+    kmet.tui.utils
+    kmet.tui.components.alt-screen-flash
+    kmet.tui.components.box
+    kmet.tui.components.cancellable-loader
+    kmet.tui.components.container
+    kmet.tui.components.dynamic-border
     kmet.tui.components.editing
+    kmet.tui.components.editor
     kmet.tui.components.expandable-text
+    kmet.tui.components.h-stack
     kmet.tui.components.image
+    kmet.tui.components.input
+    kmet.tui.components.markdown
+    kmet.tui.components.scroll-view
+    kmet.tui.components.select-list
+    kmet.tui.components.settings-list
+    kmet.tui.components.spacer
+    kmet.tui.components.spinner
+    kmet.tui.components.stack
+    kmet.tui.components.text
+    kmet.tui.components.v-stack
+    kmet.tui.components.truncated-text
     kmet.app.ui.tool-renderers
     kmet.app.keybindings])
 
@@ -869,24 +933,33 @@
    re-evaluated, so any protocols they define keep their identity. Keep in
    sync with src/kmet/libs/ when a lib is added or removed."
   '[kmet.libs.archive
+    kmet.libs.aws-sigv4
+    kmet.libs.clipboard
     kmet.libs.concurrent
+    kmet.libs.context
+    kmet.libs.crypto
     kmet.libs.diff
-    kmet.libs.edit-diff
     kmet.libs.dynamic-value
+    kmet.libs.edit-diff
     kmet.libs.edn-store
+    kmet.libs.edn-writer
     kmet.libs.hash
     kmet.libs.highlight
+    kmet.libs.hooks
+    kmet.libs.host
     kmet.libs.http
     kmet.libs.json
     kmet.libs.jsonrpc
     kmet.libs.markdown
+    kmet.libs.num
     kmet.libs.oauth
     kmet.libs.process
+    kmet.libs.reakt
     kmet.libs.sse
     kmet.libs.terminal
     kmet.libs.terminal-image
-    kmet.libs.yaml
-    kmet.libs.clipboard])
+    kmet.libs.usage
+    kmet.libs.yaml])
 
 (defn- ns-path
   "The classpath path for NS-SYM: namespace-munged (dashes → underscores),
@@ -1008,14 +1081,42 @@
     (letfn [(find-it [path]
               (let [rel (str path)]
                 (or (own rel)
-                    (some (fn [j]
-                            (when (jar-entry-source j rel)
-                              (java.net.URL. (str "jar:" (.toURL (.toURI (io/file j))) "!/" rel))))
+                    (some (fn [entry]
+                            (if (fs/directory? (str entry))
+                              ;; jolt: dep roots are extracted source dirs
+                              (let [f (io/file (str entry) rel)]
+                                (when (.exists f) (io/as-url f)))
+                              (when (jar-entry-source entry rel)
+                                (java.net.URL. (str "jar:" (.toURL (.toURI (io/file entry))) "!/" rel)))))
                           (when deps-resolver (deps-resolver)))
                     (host-resource rel))))]
       (fn
         ([path] (find-it path))
         ([path _loader] (find-it path))))))
+
+(defn- shared-var-map
+  "The SCI namespace map for one host namespace: every public var copied
+   to a sci.lang.Var via sci/copy-var* (ns-interns, not ns-publics —
+   some load-bearing vars are private, e.g.
+   clojure.spec.alpha/check-spec-asserts, and extensions resolve
+   against the full interns surface anyway).
+   Host Var objects cannot cross: bb's SCI namespaces already hold
+   sci.lang.Vars (ns-interns works there by accident), but Jolt
+   namespaces hold clojure.lang.Vars and SCI's analyzer calls
+   vars/isMacro on the value (`No method isMacro` otherwise). copy-var*
+   preserves :macro/:arglists/:doc metadata (macros keep expanding) and
+   the live root (atoms stay deref'able, fns stay callable). Never
+   deref: a deref'd fn loses macro metadata and a deref'd atom loses its
+   identity."
+  [ns-sym]
+  (let [sci-ns (sci/create-ns ns-sym)]
+    (into {}
+          (keep (fn [[k v]]
+                  ;; bb's clojure.repl/print-doc is a future, not a var —
+                  ;; deref would block-then-cast. Only Vars cross.
+                  (when (var? v)
+                    [k (sci/copy-var* v sci-ns)])))
+          (ns-interns ns-sym))))
 
 (defn- build-context-namespaces
   "The shared namespace map for extension contexts: kmet.extension (the
@@ -1025,9 +1126,10 @@
    namespaces required since the last build (the shared library layers)
    are included. RESOURCE-FN replaces clojure.java.io/resource with a
    per-extension artifact-scoped lookup (io/resource shadowing — see
-   extension-resource-fn)."
+   extension-resource-fn). Values are deref'd (see shared-var-map): host
+   Var objects cannot enter a SCI context."
   [& [resource-fn]]
-  (into {'kmet.extension (ns-interns 'kmet.extension)
+  (into {'kmet.extension (shared-var-map 'kmet.extension)
          ;; slurp/spit/file-seq are absent from SCI's builtin clojure.core —
          ;; inject the host fns so extensions can read/write files directly
          ;; (the mcp-adapter used to work around this with babashka.fs
@@ -1067,8 +1169,8 @@
                                  (str/starts-with? n "kmet.libs.")))
                     [(ns-name ns-obj)
                      (if (and (= n "clojure.java.io") resource-fn)
-                       (assoc (ns-interns ns-obj) 'resource resource-fn)
-                       (ns-interns ns-obj))])))
+                       (assoc (shared-var-map (ns-name ns-obj)) 'resource resource-fn)
+                       (shared-var-map (ns-name ns-obj)))])))
               (all-ns))))
 
 (defn- ns-form-of-source
@@ -1090,6 +1192,38 @@
          (or (str/ends-with? lower ".jar")
              (str/ends-with? lower ".zip")))))
 
+(defn- temp-root
+  "The platform temp dir for build-time caches: $TMPDIR first (Termux has
+   no /tmp; java.io.tmpdir is unreliable on babashka), else java.io.tmpdir."
+  []
+  (or (System/getenv "TMPDIR") (System/getProperty "java.io.tmpdir")))
+
+(def ^:private jar-cache-root
+  (delay (str (fs/path (temp-root) "kmet-ext-jars"))))
+
+(defn- materialize-jar!
+  "Extract the jar/zip at PATH into a cached directory and return it. Jolt
+   has no java.util.zip (kmet.libs.archive is bb-only), so jar artifacts
+   are materialized with the host unzip and then treated as DIRECTORY
+   artifacts — code, extension.edn, deps.edn and io/resource all use the
+   ordinary fs path. The cache is keyed by jar path + mtime, so a changed
+   jar re-extracts and reloads reuse the extraction. bb keeps the
+   unexpanded ZipFile path (jar-ext.md §1)."
+  [path]
+  (let [root (str (fs/path @jar-cache-root
+                           (str (fs/file-name (str path)) "-"
+                                (fs/last-modified-time (str path)))))
+        marker (str (fs/path root ".ok"))]
+    (when-not (fs/exists? marker)
+      (fs/create-dirs root)
+      (let [{:keys [exit err]} (proc/sh ["unzip" "-o" "-q" (str path) "-d" root])]
+        (when-not (zero? exit)
+          (throw (ex-info (str "failed to extract extension archive " path
+                               ": " (str/trim (str err)))
+                          {:path path}))))
+      (spit marker ""))
+    root))
+
 (defn- resolve-extension
   "Resolve PATH into {:name str :kind :file/:dir/:jar :artifact map-or-nil
    :entry-ns symbol-or-nil :file io.File}. :artifact ({:kind :dir/:jar
@@ -1101,11 +1235,22 @@
   (let [f (io/file path)]
     (cond
       (jar-archive? f path)
-      (let [entries (jar-entry-names (str f))]
-        (when-not (contains? entries "extension.edn")
+      (let [unexpanded? (not (jolt?))
+            entries (when unexpanded? (jar-entry-names (str f)))]
+        ;; jolt materializes the archive to a directory (no java.util.zip) and
+        ;; continues as a :dir artifact; bb keeps the per-call ZipFile path.
+        (when (and unexpanded? (not (contains? entries "extension.edn")))
           (throw (ex-info (str "Extension archive " path " has no extension.edn")
                           {:path path})))
-        (let [m (edn/read-string (jar-entry-source (str f) "extension.edn"))
+        (let [root (if unexpanded? (str f) (materialize-jar! (str f)))
+              manifest (if unexpanded?
+                         (jar-entry-source root "extension.edn")
+                         (let [mf (io/file root "extension.edn")]
+                           (when (.exists mf) (slurp mf))))
+              _ (when-not manifest
+                  (throw (ex-info (str "Extension archive " path " has no extension.edn")
+                                  {:path path})))
+              m (edn/read-string manifest)
               entry-ns (:entry m)]
           (when-not (symbol? entry-ns)
             (throw (ex-info (str "extension.edn :entry must be a namespace symbol, got: "
@@ -1113,7 +1258,7 @@
                             {:path path :manifest m})))
           {:name (or (:name m) (fs/file-name f))
            :kind :jar
-           :artifact {:kind :jar :root (str f)}
+           :artifact {:kind (if unexpanded? :jar :dir) :root root}
            :entry-ns entry-ns}))
 
       (.isDirectory f)
@@ -1168,6 +1313,10 @@
    sci's require machinery NPEs on a load-fn failure and swallows the
    original exception."
   [ext-name ns-form tui-namespaces libs-namespaces owns-ns?]
+  ;; NOTE: :refer [defcomponent] (a macro referred without a namespaced
+  ;; use) leaves no libspec — the ns symbol never appears. SCI resolves
+  ;; referred macros through the already-required ns, so validation only
+  ;; needs the :require entries; nothing extra to check here.
   (doseq [clause-key [:require :require-macros :use]
           lib (require-libspec-libs (ns-clause ns-form clause-key))]
     (let [s (str lib)]
@@ -1176,21 +1325,34 @@
         ;; (strict layout: membership derives from paths, not contents)
         (owns-ns? lib) nil
         (str/starts-with? s "kmet.tui.")
-        (when-not (contains? tui-namespaces lib)
+        ;; tui-namespaces covers what is loaded NOW; the library-root list
+        ;; covers what CAN be shared (lazily-loaded internal nss validate
+        ;; before their requires are loaded — e.g. review/dialogs needing
+        ;; kmet.tui.macros on second load).
+        (when-not (or (contains? tui-namespaces lib)
+                      (contains? (set tui-library-namespaces) lib))
           (throw (ex-info
                   (str "Extension " ext-name " requires " lib
                        " — not part of the kmet.tui.* library shared with extensions")
                   {:extension ext-name :ns lib})))
 
+        ;; the shared set is the injection allowlist PLUS the full library
+        ;; roots: tui-namespaces/libs-namespaces only cover namespaces
+        ;; loaded at context-build time, but a lazily-loaded internal ns
+        ;; (e.g. review/dialogs requiring kmet.tui.macros on second load)
+        ;; must validate against what CAN be shared, not what happens to
+        ;; be loaded. The load-fn serves kmet.tui.* from the host anyway.
         (#{"kmet.app.ui.tool-renderers" "kmet.app.keybindings"} s)
-        (when-not (contains? tui-namespaces lib)
+        (when-not (or (contains? tui-namespaces lib)
+                      (contains? (set tui-library-namespaces) lib))
           (throw (ex-info
                   (str "Extension " ext-name " requires " lib
                        " — not part of the shared renderer library surface")
                   {:extension ext-name :ns lib})))
 
         (str/starts-with? s "kmet.libs.")
-        (when-not (contains? libs-namespaces lib)
+        (when-not (or (contains? libs-namespaces lib)
+                      (contains? (set libs-library-namespaces) lib))
           (throw (ex-info
                   (str "Extension " ext-name " requires " lib
                        " — not part of the kmet.libs.* library shared with extensions")
@@ -1236,8 +1398,19 @@
 
 #?(:jolt
    (defn- closure-jars
-     "Stub on Jolt — extension loading is disabled."
-     [_deps-map] [])
+     "The dependency source ROOTS for DEPS-MAP on Jolt — the equivalent of
+      bb's jar closure. jolt.deps/resolve-deps (the tools.deps expansion
+      engine, AOT'd into the jolt binary) fetches Maven/git deps, EXTRACTS
+      them, and returns the extraction dirs plus :local/root paths; the
+      load-fn then serves namespaces with plain fs probes instead of
+      ZipFile (see dep-source). Resolution failures throw, mirroring the bb
+      branch. Results are plain directories, so unload drops them with the
+      context like jars on bb."
+     [deps-map]
+     (let [resolve-deps (requiring-resolve 'jolt.deps/resolve-deps)
+           base (System/getProperty "user.dir")
+           roots (:roots (resolve-deps deps-map base))]
+       (vec roots)))
    :bb
    (do
      (def ^:private bundled-artifacts
@@ -1307,14 +1480,24 @@
               (reset! jars-atom jars)
               (vreset! resolved jars)))))))
 
-(defn- jar-source
-  "The {:file :source} of NS-SYM inside the deps jar at JAR-PATH, or nil."
-  [jar-path ns-sym]
+(defn- dep-source
+  "The {:file :source} of NS-SYM inside one closure ENTRY of the
+   extension's deps.edn resolution, or nil. bb entries are jars (per-call
+   ZipFile probes); jolt entries are extracted source ROOTS (directories —
+   jolt.deps/resolve-deps materializes Maven/git deps to disk), so those
+   get a plain strict ns-path fs probe."
+  [entry ns-sym]
   (let [base (ns-path ns-sym)]
-    (some (fn [ext]
-            (when-let [source (jar-entry-source jar-path (str base ext))]
-              {:file (str jar-path "!/" base ext) :source source}))
-          source-extensions)))
+    (if (fs/directory? (str entry))
+      (some (fn [ext]
+              (let [f (io/file (str entry) (str base ext))]
+                (when (.exists f)
+                  {:file (str f) :source (slurp f)})))
+            source-extensions)
+      (some (fn [ext]
+              (when-let [source (jar-entry-source entry (str base ext))]
+                {:file (str entry "!/" base ext) :source source}))
+            source-extensions))))
 
 (defn- resource-source
   "The source of NS-SYM from the classpath, or nil."
@@ -1323,6 +1506,48 @@
     (some (fn [ext] (when-let [r (io/resource (str base ext))]
                       {:file (str r) :source (slurp r)}))
           source-extensions)))
+
+(defn- register-source-classes!
+  "Pre-register classes a load-fn SOURCE needs: scan the source text for
+   fully-qualified static/ctor positions (`(fq.Name/...`, `(fq.Name.`),
+   bare class positions (`(instance? fq.Name`), and type hints
+   (`^StringBuilder`, `^java.io.InputStream` — hinted classes never appear
+   in a callable position, so the scan collects them separately, resolving
+   short hints through bb-imports). load-fn sources bypass
+   eval-source-with-retry! (SCI evaluates the returned :source directly),
+   so without this the first internal-namespace use of an unseeded JDK
+   class fails the whole load. Short-name statics need no scan — the seed
+   covers bb-imports. Same lazy forName as the entry path; unresolvable
+   names are skipped (the analysis error surfaces them)."
+  [ctx source]
+  (let [text (str source)
+        ctor-pat (re-pattern (str "\\(" "([a-z][a-z0-9_]*"
+                                  "(?:\\.[a-zA-Z_][a-zA-Z0-9_]*)+)" "[/.]"))
+        inst-pat (re-pattern (str "\\(instance\\?\\s+" "([a-z][a-z0-9_]*"
+                                  "(?:\\.[a-zA-Z_][a-zA-Z0-9_]*)+)"))
+        hint-pat (re-pattern "\\^[a-zA-Z_][a-zA-Z0-9_.]*\\s+")
+        ;; NOTE: hint-pat has no capture group, so re-seq returns strings
+        ;; (not vectors) — destructure as m, not [m] (a [m] destructure
+        ;; binds the leading \^ Character and subs throws
+        ;; "Character cannot be cast to String"). Trim the trailing
+        ;; whitespace before the bb-imports lookup.
+        ;; hints are collected as [short-or-nil fq] so the short alias is
+        ;; registered too (see try-add-class-short!).
+        hints (keep (fn [m]
+                      (let [sym (str/trim (subs m 1))]
+                        (if (str/includes? sym ".")
+                          [nil sym]
+                          (when-let [fq (get bb-imports (symbol sym))]
+                            [(symbol sym) (str fq)]))))
+                    (re-seq hint-pat text))]
+    (doseq [[_ fq] (concat (re-seq ctor-pat text)
+                           (re-seq inst-pat text))]
+      (try-add-class! ctx fq))
+    (doseq [[short fq] hints]
+      (if short
+        (try-add-class-short! ctx short fq)
+        (try-add-class! ctx fq))))
+  nil)
 
 (defn- make-load-fn
   "Per-extension namespace resolver, evaluated inside the extension's
@@ -1338,7 +1563,7 @@
    must also match the requested symbol (strict layout is enforced at
    load, not just pack time) — otherwise the failure surfaces later as
    a missing init fn."
-  [ext-name artifact owns-ns? deps-resolver tui-namespaces libs-namespaces]
+  [ext-name artifact owns-ns? deps-resolver tui-namespaces libs-namespaces ctx-holder]
   (fn [{:keys [namespace]}]
     (or (when-let [{:keys [source display]} (and artifact (artifact-source artifact namespace))]
           (let [ns-form (ns-form-of-source source)]
@@ -1350,10 +1575,12 @@
             (validate-entry-requires! ext-name ns-form
                                       tui-namespaces libs-namespaces
                                       owns-ns?))
+          (when-let [ctx @ctx-holder]
+            (register-source-classes! ctx source))
           {:file display :source source})
-        (when-let [jars (and deps-resolver (deps-resolver))]
-          (some (fn [j] (jar-source j namespace))
-                jars))
+        (when-let [entries (and deps-resolver (deps-resolver))]
+          (some (fn [e] (dep-source e namespace))
+                entries))
         (when-not (str/starts-with? (str namespace) "kmet.")
           (resource-source namespace))
         (throw (ex-info
@@ -1391,45 +1618,118 @@
    without deps.edn pins."
   '[clojure.spec.alpha])
 
+(defn- seed-context-classes!
+  "Pre-register every bb-imports FQ name plus the runtime-classes (factory-made
+   classes Class/forName cannot load) on CTX. Ordinary JDK classes resolve by
+   name on both hosts, so this sweep makes the common System/File/Thread
+   references first-try hits; anything else resolves lazily via
+   eval-source-with-retry! / the load-fn path. Same call on both hosts."
+  [ctx]
+  (doseq [[short fq] bb-imports]
+    (try-add-class-short! ctx short (str fq)))
+  (doseq [^Class c @runtime-classes]
+    (try
+      (sci/add-class! ctx (symbol (.getName c)) c)
+      (catch Throwable _ nil)))
+  nil)
+
+(defn- host-requires!
+  "Require the shared library layers before a per-extension context is
+   built, so the all-ns scan in build-context-namespaces finds them.
+   bb-only ports (clojure.spec, rewrite-clj, tools.reader, data.xml —
+   SCI-incompatible Maven sources with bb-bundled replacements) are
+   required only on bb: Jolt has no bundled copies (its require fails),
+   and their namespaces stay absent from Jolt contexts — extensions
+   requiring them there get the actionable load-fn error."
+  []
+  (apply require (concat tui-library-namespaces libs-library-namespaces))
+  (when-not (jolt?)
+    (apply require (concat spec-port-namespaces bb-shared-namespaces)))
+  nil)
+
 (defn- create-context
-  "Build the isolated sci context for one extension: full bb classes and
-   imports, shared global namespaces (contract + builtins + the kmet.tui.*
-   TUI library + the kmet.libs.* library layer, required first so they
-   exist for the injection), and the per-extension load-fn that checks deps
-   — own artifact, declared deps (resolved lazily on first library require),
-   bb-bundled namespaces, with actionable errors for everything else.
-   RESOURCE-FN replaces clojure.java.io/resource with an artifact-scoped
-   lookup (nil keeps the host resource)."
+  "Build the isolated sci context for one extension: lazy host-delegated
+   classes ({:allow :all} for instances + Class/forName seeding and
+   miss-retry for statics/ctors — identical on bb and Jolt), the bb
+   short-name :imports, shared global namespaces (contract + builtins +
+   the kmet.tui.* TUI library + the kmet.libs.* library layer, required
+   first so they exist for the injection), and the per-extension load-fn
+   that checks deps — own artifact, declared deps (resolved lazily on
+   first library require), bb-bundled namespaces, with actionable errors
+   for everything else. RESOURCE-FN replaces clojure.java.io/resource
+   with an artifact-scoped lookup (nil keeps the host resource)."
   [ext-name artifact owns-ns? deps-resolver resource-fn]
-  (apply require (concat tui-library-namespaces libs-library-namespaces
-                         spec-port-namespaces bb-shared-namespaces))
-  (sci/init {:classes context-classes
-             :imports bb-imports
-             :features #{:bb :clj}
-             :namespaces (build-context-namespaces resource-fn)
-             :load-fn (make-load-fn ext-name artifact owns-ns?
-                                    deps-resolver
-                                    (shared-tui-namespaces)
-                                    (shared-libs-namespaces))}))
+  (host-requires!)
+  ;; ctx-holder lets the load-fn pre-register source classes on the context
+  ;; being built: the load-fn runs after init returns, so the atom is set by
+  ;; then (single-threaded load — no race).
+  (let [ctx-holder (atom nil)
+        ctx (sci/init {:classes {:allow :all}
+                       :imports bb-imports
+                       :features (if (jolt?) #{:jolt :clj} #{:bb :clj})
+                       :namespaces (build-context-namespaces resource-fn)
+                       :load-fn (make-load-fn ext-name artifact owns-ns?
+                                              deps-resolver
+                                              (shared-tui-namespaces)
+                                              (shared-libs-namespaces)
+                                              ctx-holder)})]
+    (reset! ctx-holder ctx)
+    (seed-context-classes! ctx)
+    ctx))
+
+(defn- missing-class-of
+  "The class to register for an eval failure with message MSG, or nil.
+   Three miss shapes: `Unable to resolve classname: fq.Name` (FQN —
+   forName it directly); `Unable to resolve symbol: Short/method`
+   (short-name static — resolve Short through bb-imports first); and
+   `Unable to resolve symbol: fq.Name/member` (a dotted FQ qualifier in
+   a class position such as instance? — forName the qualifier directly).
+   Returns the FQ name or nil when the message is not a resolvable class
+   miss."
+  [msg]
+  (or (second (re-find missing-classname-re (str msg)))
+      (when-let [[_ qualifier] (re-find missing-symbol-re (str msg))]
+        (if (str/includes? qualifier ".")
+          qualifier
+          (when-let [fq (get bb-imports (symbol qualifier))]
+            (str fq))))))
+
+(defn- eval-source-with-retry!
+  "eval-string* SOURCE in CTX, registering lazily-missed classes until the
+   source evaluates or a failure is not a resolvable class miss. SCI
+   analyzes the whole source before evaluating, so one source can miss
+   several classes in sequence (each retry surfaces the next); the loop
+   caps at 100 registrations — past that the source is pathological and
+   the last error propagates. Re-evaluation is safe: SCI keeps the
+   partially-loaded namespaces in the context, so already-evaluated
+   top-level forms re-evaluate idempotently (defs re-def, requires
+   no-op). Tracked to avoid re-adding: each miss registers a new class,
+   so the loop always makes progress."
+  [ctx source]
+  (loop [attempt 0]
+    (let [result (try
+                   (sci/eval-string* ctx source)
+                   (catch Exception e e))]
+      (if-not (instance? Throwable result)
+        result
+        (let [fq (missing-class-of (ex-message result))]
+          (if (and fq (< attempt 100) (try-add-class! ctx fq))
+            (recur (inc attempt))
+            (throw result)))))))
 
 (defn- eval-source!
-  "Evaluate every top-level form of the SOURCE string in CTX. DISPLAY names
-   the origin (file path or jar!/entry) in error messages. *ns* is bound
-   around the whole eval so sci's ns handling cannot leak a namespace change
-   into kmet (a per-form binding would reset sci's current-ns and break alias
-   resolution between forms)."
+  "Evaluate the SOURCE string in CTX via eval-string* (one call — SCI binds
+   its own current-ns per form, so (ns ...) switches work on both hosts;
+   the old host-read + eval-form loop needed sci/binding on Jolt, which is
+   broken on bb). DISPLAY names the origin (file path or jar!/entry) in
+   error messages."
   [ctx source display]
-  (binding [*ns* (or (find-ns 'user) *ns*)]
-    (with-open [r (java.io.PushbackReader. (io/reader (.getBytes ^String source "UTF-8")))]
-      (loop [form (read r false ::eof)]
-        (when-not (= ::eof form)
-          (try
-            (sci/eval-form ctx form)
-            (catch Exception e
-              (throw (ex-info (str (ex-message e) " (" display ")")
-                              (assoc (ex-data e) :extension-file display)
-                              e))))
-          (recur (read r false ::eof)))))))
+  (try
+    (eval-source-with-retry! ctx source)
+    (catch Exception e
+      (throw (ex-info (str (ex-message e) " (" display ")")
+                      (assoc (ex-data e) :extension-file display)
+                      e)))))
 
 (defn- extension-var
   "The value of VAR-NAME in ENTRY-NS of EXT's context, or nil."
@@ -1447,97 +1747,96 @@
    returned (PATH names what failed — the result map has no extension name
    to report)."
   [path]
-  (if (find-var 'clojure.core/*jolt-version*)
-    {:extension nil :path path :error "Extensions not supported on Jolt"}
-    (let [f (io/file path)
-          {:keys [name kind artifact entry-ns file]} (resolve-extension path)
-          ext (map->Extension
-               {:name name
-                :path (str (fs/canonicalize f))
-                :kind kind
-                :entry-ns (atom nil)
-                :ctx (atom nil)
-                :jars (atom [])
-                :api (atom nil)
-                :deregister-fns (atom [])
-                :initialized? (atom false)})]
-      (try
-        (let [deps (when artifact
-                     (if (= :jar kind)
-                       (:deps (edn/read-string
-                               (or (jar-entry-source (:root artifact) "deps.edn") "{}")))
-                       (deps-of-root (:root artifact))))
-              jar-info (when (= :jar kind) (jar-namespaces (:root artifact)))
-              owns-ns? (if artifact
-                         (fn [ns-sym] (artifact-owns-ns? artifact jar-info ns-sym))
-                         (constantly false))
-              deps-resolver (make-deps-resolver deps (:jars ext))
-              ctx (create-context name artifact owns-ns?
-                                  deps-resolver
-                                  (when artifact (extension-resource-fn artifact jar-info deps-resolver)))]
-          (doseq [lib (keys deps)]
-            (when (contains? bb-bundled-libs (str lib))
-              (binding [*out* *err*]
-                (println "Warning: extension" (:name ext) "pins" lib
-                         "which babashka bundles — the Maven copy may not run;"
-                         "omit it from deps.edn to use the bundled version."))))
-          (reset! (:ctx ext) ctx)
-          (if artifact
-            (let [{:keys [source display]} (artifact-source artifact entry-ns)]
-              (when-not source
-                (throw (ex-info (str "extension.edn :entry not found: " entry-ns)
-                                {:path path :entry entry-ns})))
+  (let [f (io/file path)
+        {:keys [name kind artifact entry-ns file]} (resolve-extension path)
+        ext (map->Extension
+             {:name name
+              :path (str (fs/canonicalize f))
+              :kind kind
+              :entry-ns (atom nil)
+              :ctx (atom nil)
+              :jars (atom [])
+              :api (atom nil)
+              :deregister-fns (atom [])
+              :initialized? (atom false)})]
+    (try
+      (let [jar-artifact? (and artifact (= :jar (:kind artifact)))
+            deps (when artifact
+                   (if jar-artifact?
+                     (:deps (edn/read-string
+                             (or (jar-entry-source (:root artifact) "deps.edn") "{}")))
+                     (deps-of-root (:root artifact))))
+            jar-info (when jar-artifact? (jar-namespaces (:root artifact)))
+            owns-ns? (if artifact
+                       (fn [ns-sym] (artifact-owns-ns? artifact jar-info ns-sym))
+                       (constantly false))
+            deps-resolver (make-deps-resolver deps (:jars ext))
+            ctx (create-context name artifact owns-ns?
+                                deps-resolver
+                                (when artifact (extension-resource-fn artifact jar-info deps-resolver)))]
+        (doseq [lib (keys deps)]
+          (when (contains? bb-bundled-libs (str lib))
+            (binding [*out* *err*]
+              (println "Warning: extension" (:name ext) "pins" lib
+                       "which babashka bundles — the Maven copy may not run;"
+                       "omit it from deps.edn to use the bundled version."))))
+        (reset! (:ctx ext) ctx)
+        (if artifact
+          (let [{:keys [source display]} (artifact-source artifact entry-ns)]
+            (when-not source
+              (throw (ex-info (str "extension.edn :entry not found: " entry-ns)
+                              {:path path :entry entry-ns})))
             ;; fail fast on forbidden/misspelled kmet.* requires — sci's
             ;; require machinery swallows the load-fn error into an NPE.
             ;; The entry source must also declare :entry-ns itself (strict
             ;; layout is enforced at load, not just pack time).
-              (let [ns-form (ns-form-of-source source)]
-                (when-not (= entry-ns (second ns-form))
-                  (throw (ex-info (str "Extension " name " strict layout violation: "
-                                       display " declares " (second ns-form)
-                                       ", expected " entry-ns)
-                                  {:path path :entry entry-ns})))
-                (validate-entry-requires! name ns-form
-                                          (shared-tui-namespaces)
-                                          (shared-libs-namespaces)
-                                          owns-ns?))
-              (eval-source! ctx source display)
-              (let [init-var (extension-var ext entry-ns 'init)]
+            (let [ns-form (ns-form-of-source source)]
+              (when-not (= entry-ns (second ns-form))
+                (throw (ex-info (str "Extension " name " strict layout violation: "
+                                     display " declares " (second ns-form)
+                                     ", expected " entry-ns)
+                                {:path path :entry entry-ns})))
+              (validate-entry-requires! name ns-form
+                                        (shared-tui-namespaces)
+                                        (shared-libs-namespaces)
+                                        owns-ns?))
+            (eval-source! ctx source display)
+            (let [init-var (extension-var ext entry-ns 'init)]
+              (when-not init-var
+                (throw (ex-info (str "Extension " (:name ext)
+                                     " does not define an init fn")
+                                {:path path})))
+              (reset! (:entry-ns ext) entry-ns)))
+          ;; single-file extension: the file is the entry itself
+          (let [source (slurp file)]
+            (validate-entry-requires! name (ns-form-of-source source)
+                                      (shared-tui-namespaces)
+                                      (shared-libs-namespaces)
+                                      owns-ns?)
+            (eval-source! ctx source (str file))
+            (let [ns-sym (some-> (ns-form-of-source source) second)]
+              (when-not ns-sym
+                (throw (ex-info (str "Extension " (:name ext)
+                                     " file does not start with (ns ...)")
+                                {:path path})))
+              (let [init-var (extension-var ext ns-sym 'init)]
                 (when-not init-var
                   (throw (ex-info (str "Extension " (:name ext)
                                        " does not define an init fn")
-                                  {:path path})))
-                (reset! (:entry-ns ext) entry-ns)))
-          ;; single-file extension: the file is the entry itself
-            (let [source (slurp file)]
-              (validate-entry-requires! name (ns-form-of-source source)
-                                        (shared-tui-namespaces)
-                                        (shared-libs-namespaces)
-                                        owns-ns?)
-              (eval-source! ctx source (str file))
-              (let [ns-sym (some-> (ns-form-of-source source) second)]
-                (when-not ns-sym
-                  (throw (ex-info (str "Extension " (:name ext)
-                                       " file does not start with (ns ...)")
-                                  {:path path})))
-                (let [init-var (extension-var ext ns-sym 'init)]
-                  (when-not init-var
-                    (throw (ex-info (str "Extension " (:name ext)
-                                         " does not define an init fn")
-                                    {:path path}))))
-                (reset! (:entry-ns ext) ns-sym))))
-          (let [api (create-extension-api ext)]
-            (reset! (:api ext) api)
-            ((extension-var ext @(:entry-ns ext) 'init) api)
-            (reset! (:initialized? ext) true)))
-        (swap! extensions conj ext)
-        {:extension (:name ext) :error nil}
-        (catch Exception e
-          (unload-extension! ext)
-          {:extension nil
-           :path path
-           :error (or (ex-message e)
-                      (str "load failed: " (.getName (class e))))})))))
+                                  {:path path}))))
+              (reset! (:entry-ns ext) ns-sym))))
+        (let [api (create-extension-api ext)]
+          (reset! (:api ext) api)
+          ((extension-var ext @(:entry-ns ext) 'init) api)
+          (reset! (:initialized? ext) true)))
+      (swap! extensions conj ext)
+      {:extension (:name ext) :error nil}
+      (catch Exception e
+        (unload-extension! ext)
+        {:extension nil
+         :path path
+         :error (or (ex-message e)
+                    (str "load failed: " (.getName (class e))))}))))
 
 (defn unload-extension!
   "Unload an extension: shutdown (if initialized), deregister everything it
@@ -1670,16 +1969,14 @@
    extensions load). Returns the list of per-extension {:extension name
    :error} results; failures are also printed as warnings."
   [paths]
-  (if (find-var 'clojure.core/*jolt-version*)
-    []
-    (mapv (fn [path]
-            (let [result (load-extension! path)]
-              (when (and result (:error result))
-                (binding [*out* *err*]
-                  (println "Warning: Failed to load extension" path ":"
-                           (:error result))))
-              result))
-          paths)))
+  (mapv (fn [path]
+          (let [result (load-extension! path)]
+            (when (and result (:error result))
+              (binding [*out* *err*]
+                (println "Warning: Failed to load extension" path ":"
+                         (:error result))))
+            result))
+        paths))
 
 (defn load-extensions-from-dir
   "Load all extensions in DIR (a container): top-level .clj files, .jar/.zip
@@ -1687,11 +1984,9 @@
    per-extension {:extension name :error} results; failures are also printed
    as warnings."
   [dir]
-  (if (find-var 'clojure.core/*jolt-version*)
-    []
-    (let [d (io/file dir)]
-      (when (fs/directory? d)
-        (load-extension-paths! (extension-artifact-paths (str d)))))))
+  (let [d (io/file dir)]
+    (when (fs/directory? d)
+      (load-extension-paths! (extension-artifact-paths (str d))))))
 
 (defn reload-extensions!
   "Unload all loaded extensions, then load from DIRS. Returns the list of
@@ -1699,8 +1994,10 @@
    custom footer/header/editor, dialogs) is reset first (pi: reload calls
    resetExtensionUI before reloading)."
   [dirs]
-  (if (find-var 'clojure.core/*jolt-version*)
-    []
-    (do (ui-call :reset)
-        (unload-all-extensions!)
-        (mapcat load-extensions-from-dir dirs))))
+  (ui-call :reset)
+  (unload-all-extensions!)
+  ;; EAGER (vec around the mapcat): loading is a side effect, and a lazy
+  ;; result means a caller that ignores the return value never loads
+  ;; anything. bb's apply/concat realizes the seq anyway; jolt defers,
+  ;; so the same code silently loaded nothing there.
+  (vec (mapcat load-extensions-from-dir dirs)))

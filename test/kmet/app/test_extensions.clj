@@ -2,9 +2,10 @@
   "Extension runtime tests: the init/shutdown contract, load/unload/reload
    lifecycle, per-extension deregistration, and the nullable api fixture
    (kmet.extension/create-nullable-api) for testing extensions in isolation.
-   Tests that evaluate extensions through the SCI loader carry ^:bb-only
-   (extension loading is disabled on Jolt); pure-registry tests run on both
-   hosts."
+   The SCI loader runs on both hosts (bb's bundled SCI, Jolt's vendored
+   0.13.53); only bb-bundled-port tests (tools.reader/spec ports), Maven
+   deps tests (cljfmt, version isolation, bad deps) and jar tests
+   (java.util.zip is unshimmed on Jolt) stay ^:bb-only."
   (:require [clojure.test :as t :refer [testing]]
             [clojure.string :as str]
             [clojure.java.io :as io]
@@ -158,7 +159,7 @@
 
 ;; ─── Load / unload / reload lifecycle (real runtime) ─────────────────────
 
-(t/deftest ^:bb-only test-load-single-file-extension
+(t/deftest test-load-single-file-extension
   (extensions/clear-extensions!)
   (let [result (extensions/load-extension! "test/fixtures/ext-single/hello_ext.clj")]
     (t/is (nil? (:error result)) (str "loaded: " (:error result)))
@@ -174,7 +175,7 @@
       (t/is (nil? (tools/get-tool "hello-ext-tool")))
       (t/is (nil? (extensions/get-flag "ext-hello"))))))
 
-(t/deftest ^:bb-only test-load-manifest-extension
+(t/deftest test-load-manifest-extension
   (extensions/clear-extensions!)
   (let [result (extensions/load-extension! "test/fixtures/ext-dir")]
     (t/is (nil? (:error result)) (str "loaded: " (:error result)))
@@ -189,7 +190,7 @@
       (t/is (nil? (tools/get-tool "multi-ext-tool")))
       (t/is (empty? (extensions/get-loaded-extensions))))))
 
-(t/deftest ^:bb-only test-unload-removes-provider-registration
+(t/deftest test-unload-removes-provider-registration
   (extensions/clear-extensions!)
   (models/load-catalogs!)
   (models/clear-extension-providers!)
@@ -216,7 +217,7 @@
         (models/clear-extension-providers!)
         (fs/delete-tree dir)))))
 
-(t/deftest ^:bb-only test-extension-dir-is-own-directory
+(t/deftest test-extension-dir-is-own-directory
   ;; :extension-dir must be the extension's OWN directory — for a dir
   ;; extension :path IS the dir, so the old (fs/parent :path) was wrong and
   ;; broke :extension-dir-relative resource discovery (skills/...).
@@ -230,7 +231,7 @@
               (str "got: " (:extension-dir loaded)))))
     (extensions/unload-all-extensions!)))
 
-(t/deftest ^:bb-only test-single-file-extension-dir-is-parent
+(t/deftest test-single-file-extension-dir-is-parent
   (extensions/clear-extensions!)
   (let [result (extensions/load-extension! "test/fixtures/ext-single/hello_ext.clj")]
     (t/is (nil? (:error result)) (str "loaded: " (:error result)))
@@ -241,7 +242,7 @@
               (str "got: " (:extension-dir loaded)))))
     (extensions/unload-all-extensions!)))
 
-(t/deftest ^:bb-only test-unload-extension-nil-noop
+(t/deftest test-unload-extension-nil-noop
   (extensions/clear-extensions!)
   ;; the load result map carries :extension (the name), not the Extension
   ;; record — passing nil to unload-extension! used to throw a cryptic
@@ -253,7 +254,7 @@
       (extensions/unload-all-extensions!)
       (t/is (empty? (extensions/get-loaded-extensions))))))
 
-(t/deftest ^:bb-only test-load-manifest-extension-via-symlink
+(t/deftest test-load-manifest-extension-via-symlink
   ;; extension dirs are commonly installed as symlinks into a repo checkout;
   ;; strict ns-path probes resolve through the linked root or every own-file
   ;; require fails
@@ -273,7 +274,7 @@
           (extensions/unload-all-extensions!)
           (fs/delete-if-exists link))))))
 
-(t/deftest ^:bb-only test-extension-context-has-slurp-spit
+(t/deftest test-extension-context-has-slurp-spit
   ;; slurp/spit are absent from SCI's builtin clojure.core; the context
   ;; injects the host fns (see build-context-namespaces), so extensions
   ;; can read/write files without babashka.fs workarounds
@@ -388,7 +389,7 @@
                                              {:code "(defn foo [x]\n  (if x\n   1\n   2))"})))))
     (extensions/unload-all-extensions!)))
 
-(t/deftest ^:bb-only test-load-missing-require-error
+(t/deftest test-load-missing-require-error
   ;; a require the loader cannot serve must surface an actionable message,
   ;; not a bare NullPointerException (the load-fn used to call a nil
   ;; deps-resolver when the extension had no deps.edn)
@@ -437,7 +438,7 @@
       (t/is (nil? (tools/get-tool "iso-a")))
       (t/is (nil? (tools/get-tool "iso-b"))))))
 
-(t/deftest ^:bb-only test-load-failure-rolls-back
+(t/deftest test-load-failure-rolls-back
   (extensions/clear-extensions!)
   (testing "a file without init fails and leaves no trace"
     (let [dir "target/test-ext-bad"]
@@ -481,9 +482,7 @@
                       {:type :agent-end}))
             "arity-1 handlers fail fast — no legacy shim"))))
 
-(t/deftest ^:bb-only test-extension-ctx-events-via-bus
-  ;; bb-only: evaluates an extension through the SCI loader, which is
-  ;; disabled on Jolt (load-extension! returns an error stub there).
+(t/deftest test-extension-ctx-events-via-bus
   (testing "sci handlers receive the ctx through the real bus path"
     (extensions/clear-extensions!)
     (let [dir "target/test-ext-ctx-events"
@@ -521,12 +520,12 @@
                           (:cmds probe-a)))
             (t/is (every? #(not (contains? % :handler)) (:cmds probe-a)))
             (t/is (every? #(not (contains? % :extension-handler)) (:cmds probe-a))))))
+      (extensions/unload-all-extensions!)
       (unsub-a)
       (unsub-b)
       (fs/delete-tree dir))))
-(t/deftest ^:bb-only test-extension-command-ctx-dispatch
-  ;; bb-only: evaluates an extension through the SCI loader, which is
-  ;; disabled on Jolt. (Previously a top-level testing block, so its
+(t/deftest test-extension-command-ctx-dispatch
+  ;; (Previously a top-level testing block, so its
   ;; assertions ran at namespace load instead of as a test.)
   (testing "extension commands carry :extension-handler for ctx dispatch"
     (extensions/clear-extensions!)
@@ -544,9 +543,10 @@
           (t/is (fn? (:extension-handler c)))
           (t/is (= {:mode :print :args "hi"}
                    ((:extension-handler c) (extensions/build-extension-context) "hi"))))
+        (extensions/unload-all-extensions!)
         (fs/delete-tree dir)))))
 
-(t/deftest ^:bb-only test-extension-namespace-isolation
+(t/deftest test-extension-namespace-isolation
   (extensions/clear-extensions!)
   (let [load (fn [name content]
                (let [dir (str "target/test-ext-iso-" name)]
@@ -554,6 +554,10 @@
                  (spit (str dir "/ext.clj") content)
                  (let [result (extensions/load-extension! (str dir "/ext.clj"))]
                    (fs/delete-tree dir)
+                   ;; unload the single-file probe so each testing block starts
+                   ;; clean (bb tolerates same-path reloads; Jolt's runner runs
+                   ;; all vars on one future where residue breaks later vars)
+                   (extensions/unload-all-extensions!)
                    result)))]
     (testing "a manifest-dir extension's own internal namespaces load
               regardless of prefix (strict ns-path lookup)"
@@ -572,7 +576,8 @@
               "(ns kmet.extensions.myext.internal)\n(defn answer [] 42)\n")
         (let [result (extensions/load-extension! dir)]
           (fs/delete-tree dir)
-          (t/is (nil? (:error result)) (str "loaded: " (:error result))))))
+          (t/is (nil? (:error result)) (str "loaded: " (:error result)))
+          (extensions/unload-all-extensions!))))
 
     (testing "kmet.app.* requires are rejected with an actionable error"
       (let [result (load "app" "(ns bad-app (:require [kmet.app.commands :as c]))\n(defn init [api] nil)\n")]
@@ -595,22 +600,24 @@
     (testing "valid kmet.libs.* requires load and share the real library"
       (let [result (load "lib" "(ns good-lib\n  (:require [kmet.libs.hash :as hash]\n            [kmet.libs.yaml :as yaml]))\n(defn init [api]\n  (let [s (hash/short-hash \"hi\")]\n    (when-not (string? s)\n      (throw (ex-info \"hash failed\" {})))))\n")]
         (t/is (nil? (:error result)) (str "loaded: " (:error result)))))
-    (testing "kmet.libs.archive loads from SCI and extracts zips (no ZipFile interop in extensions)"
-      (let [result (load "archive" (str "(ns good-archive\n  (:require [babashka.fs :as fs]\n"
-                                        "            [clojure.java.io :as io]\n"
-                                        "            [kmet.libs.archive :as archive]))\n"
-                                        "(defn init [_api]\n"
-                                        "  (let [tmpdir (or (System/getenv \"TMPDIR\") (System/getProperty \"java.io.tmpdir\"))\n"
-                                        "        zip (str (fs/path tmpdir \"arc-test.zip\"))\n"
-                                        "        out (str (fs/path tmpdir \"arc-out\"))]\n"
-                                        "    (with-open [zos (java.util.zip.ZipOutputStream. (io/output-stream zip))]\n"
-                                        "      (.putNextEntry zos (java.util.zip.ZipEntry. \"a.txt\"))\n"
-                                        "      (.write zos (.getBytes \"hi\" \"UTF-8\"))\n"
-                                        "      (.closeEntry zos))\n"
-                                        "    (let [extracted (archive/extract-zip! zip out)]\n"
-                                        "      (when-not (= \"hi\" (slurp (str (first extracted))))\n"
-                                        "        (throw (ex-info \"archive failed\" {}))))))\n"))]
-        (t/is (nil? (:error result)) (str "loaded: " (:error result)))))
+    ;; java.util.zip is unshimmed on Jolt (M4) — the archive roundtrip stays bb-only.
+    (when-not (boolean (find-var 'clojure.core/*jolt-version*))
+      (testing "kmet.libs.archive loads from SCI and extracts zips (no ZipFile interop in extensions)"
+        (let [result (load "archive" (str "(ns good-archive\n  (:require [babashka.fs :as fs]\n"
+                                          "            [clojure.java.io :as io]\n"
+                                          "            [kmet.libs.archive :as archive]))\n"
+                                          "(defn init [_api]\n"
+                                          "  (let [tmpdir (or (System/getenv \"TMPDIR\") (System/getProperty \"java.io.tmpdir\"))\n"
+                                          "        zip (str (fs/path tmpdir \"arc-test.zip\"))\n"
+                                          "        out (str (fs/path tmpdir \"arc-out\"))]\n"
+                                          "    (with-open [zos (java.util.zip.ZipOutputStream. (io/output-stream zip))]\n"
+                                          "      (.putNextEntry zos (java.util.zip.ZipEntry. \"a.txt\"))\n"
+                                          "      (.write zos (.getBytes \"hi\" \"UTF-8\"))\n"
+                                          "      (.closeEntry zos))\n"
+                                          "    (let [extracted (archive/extract-zip! zip out)]\n"
+                                          "      (when-not (= \"hi\" (slurp (str (first extracted))))\n"
+                                          "        (throw (ex-info \"archive failed\" {}))))))\n"))]
+          (t/is (nil? (:error result)) (str "loaded: " (:error result))))))
     (testing "the whitelisted built-in renderer namespace loads and shares direct vars"
       (let [result (load "renderer" "(ns good-renderer\n  (:require [kmet.app.ui.tool-renderers :as renderers]))\n(defn init [_api]\n  (when-not (fn? renderers/render-edit-call)\n    (throw (ex-info \"renderer failed\" {}))))\n")]
         (t/is (nil? (:error result)) (str "loaded: " (:error result)))))
@@ -638,7 +645,7 @@
         (t/is (empty? (extensions/get-loaded-extensions)))))
     (fs/delete-tree dir)))
 
-(t/deftest ^:bb-only test-reload-extensions
+(t/deftest test-reload-extensions
   (testing "reload-extensions! (container dirs) unloads + reloads"
     (let [container (str "target/test-ext-container-" (System/currentTimeMillis))]
       (fs/create-dirs container)
@@ -892,6 +899,11 @@
   ;; jar distribution (jar-ext.md §1): code served from the archive without
   ;; expansion (per-call ZipFile), resources via the shadowed io/resource,
   ;; :extension-dir nil, unload clean.
+  ;; ^:bb-only for the TEST MECHANICS (it builds the archive with
+  ;; java.util.zip.ZipOutputStream, which Jolt lacks) — the loader itself
+  ;; accepts jars on Jolt by materializing them with `unzip` and treating
+  ;; them as directory artifacts (verified manually: own namespaces, bundled
+  ;; io/resource, .zip suffix and container discovery all work).
   (extensions/clear-extensions!)
   (let [dir "target/test-ext-jar-src"
         jar "target/test-ext-jar.jar"]
@@ -971,7 +983,7 @@
         (fs/delete-tree dir)
         (fs/delete-if-exists jar)))))
 
-(t/deftest ^:bb-only test-extension-dir-resource-fallback
+(t/deftest test-extension-dir-resource-fallback
   ;; dir extensions keep :extension-dir + a working io/resource file-URL
   ;; fallback (jar-ext.md §4 — same test jar layout, unpacked).
   (extensions/clear-extensions!)
@@ -998,7 +1010,7 @@
         (extensions/unload-all-extensions!)
         (fs/delete-tree dir)))))
 
-(t/deftest ^:bb-only test-extension-self-registers-skill-and-prompt
+(t/deftest test-extension-self-registers-skill-and-prompt
   ;; jar-ext.md §5: extensions self-register bundled content through
   ;; ext/register-skill! / ext/register-prompt! (no host enumeration);
   ;; unload deregisters exactly what the extension added.
@@ -1041,29 +1053,38 @@
         (t/is (nil? (prompts/get-prompt-template "selfreg-tpl")) "unload removes the template")
         (fs/delete-tree dir)))))
 
-(t/deftest ^:bb-only test-shipped-extensions-load-from-src
+(t/deftest test-shipped-extensions-load-from-src
   ;; the repo's own extensions restructured to src/-as-artifact-root
   ;; (jar-ext.md §2): every shipped src/ dir loads through the real runtime.
-  (extensions/clear-extensions!)
-  (doseq [path ["extensions/clojure/src"
-                "extensions/lsp-adapter/src"
-                "extensions/mcp-adapter/src"
-                "extensions/review/src"
-                "extensions/tree-sitter/src"]]
-    (let [result (extensions/load-extension! path)]
-      (t/is (nil? (:error result)) (str path " loaded: " (:error result)))))
-  (testing "tools + skills from the shipped extensions are live"
-    (t/is (some? (tools/get-tool "clojure_edit")))
-    (t/is (some? (tools/get-tool "lsp")))
-    (t/is (some? (tools/get-tool "mcp")))
-    (t/is (some? (skills/get-skill "clojure-edit")))
-    (t/is (some? (skills/get-skill "mcp"))))
-  (testing "extension skills disclose from memory"
-    (t/is (str/includes? (skills/expand-skill-command "/skill:clojure-edit")
-                         "clojure_edit")))
-  (extensions/unload-all-extensions!)
-  (skills/clear-skills!)
-  (prompts/clear-prompt-templates!))
+  ;;
+  ;; bb-only: the shipped extensions need d
+  ;;   - deps.edn closures (clojure → cljfmt/rewrite-clj, M2) and
+  ;;   - JDK classes jolt's class graph does not supply (lsp's
+  ;;     ^StringBuilder type hint trips jolt's RFC 0014 "no dependency
+  ;;     provides java.lang.StringBuilder" path),
+  ;; tracked for the Jolt follow-up; the SCI loader itself runs on both
+  ;; hosts (see the file docstring).
+  (when-not (boolean (find-var 'clojure.core/*jolt-version*))
+    (extensions/clear-extensions!)
+    (doseq [path ["extensions/clojure/src"
+                  "extensions/lsp-adapter/src"
+                  "extensions/mcp-adapter/src"
+                  "extensions/review/src"
+                  "extensions/tree-sitter/src"]]
+      (let [result (extensions/load-extension! path)]
+        (t/is (nil? (:error result)) (str path " loaded: " (:error result)))))
+    (testing "tools + skills from the shipped extensions are live"
+      (t/is (some? (tools/get-tool "clojure_edit")))
+      (t/is (some? (tools/get-tool "lsp")))
+      (t/is (some? (tools/get-tool "mcp")))
+      (t/is (some? (skills/get-skill "clojure-edit")))
+      (t/is (some? (skills/get-skill "mcp"))))
+    (testing "extension skills disclose from memory"
+      (t/is (str/includes? (skills/expand-skill-command "/skill:clojure-edit")
+                           "clojure_edit")))
+    (extensions/unload-all-extensions!)
+    (skills/clear-skills!)
+    (prompts/clear-prompt-templates!)))
 
 (t/deftest ^:slow ^:bb-only test-packed-clojure-jar-roundtrip
   ;; end-to-end jar distribution for a real shipped extension: pack

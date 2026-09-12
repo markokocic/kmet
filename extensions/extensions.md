@@ -182,9 +182,12 @@ overrides it).
 A `.jar` (or `.zip` — same bytes, either suffix) with the directory layout
 above at its root loads exactly like the directory: `extension.edn` (+
 optional `deps.edn`) on top, code at ns paths, resources by exact name.
-The archive is **never expanded** — code is served per-call from the zip
-and resources via `io/resource` (see below); nothing is written outside
-`~/.m2`/`~/.gitlibs`. Discovery picks up top-level `*.jar`/`*.zip` files
+On babashka the archive is **never expanded** — code is served per-call from
+the zip and resources via `io/resource` (see below); nothing is written
+outside `~/.m2`/`~/.gitlibs`. On Jolt (no `java.util.zip`) the loader
+extracts the archive with `unzip` into a temp cache keyed by path + mtime
+and treats it as a directory artifact — author-visible behavior is the same.
+Discovery picks up top-level `*.jar`/`*.zip` files
 alongside `*.clj` files and manifest dirs. Pack one with
 `bb pack-extension <src-dir> [out.jar]` (verify-then-zip: `:entry`
 resolves, every `.clj` ns matches its path, `deps.edn` carries only
@@ -270,6 +273,32 @@ Extension code runs in an isolated SCI context without `future`/`pmap`/`pcalls` 
   by reference.
 - Single-file extensions (plain `.clj` files, no directory) cannot carry a
   `deps.edn`.
+
+#### Host support (Jolt)
+
+The loader runs on Jolt too, with the same contract (isolated SCI context per
+extension, `:load-fn` serving own files + declared deps, `unload` dropping the
+context). Host differences are implementation, not author-visible:
+
+- **SCI version.** babashka bundles SCI; Jolt resolves the jolt-gated pin
+  (`org.babashka/sci` 0.13.53, declared in `jolt/deps.edn`) since the latest
+  SCI needs `clojure.core/Inst`, absent on Jolt. A few SCI fixes present in
+  babashka's bundled build are therefore missing on Jolt.
+- **Classes.** Jolt has no class enumeration, so classes are registered
+  lazily: `{:classes {:allow :all}}` delegates instance calls, `bb-imports`
+  short names plus `Class/forName` cover statics/ctors/hints (with a miss
+  retry). Classes Jolt's class graph does not supply (e.g. some JDK classes
+  reachable only through a type hint) fail the load there for now.
+- **Deps.** bb resolves the closure to jars and serves them with `ZipFile`;
+  Jolt uses `jolt.deps/resolve-deps` and serves the extracted source roots
+  with fs probes (`extension-jars` returns roots on Jolt).
+- **Jars.** Jolt materializes `.jar`/`.zip` artifacts with `unzip` into a
+  temp cache and treats them as directory artifacts; bb keeps the unexpanded
+  ZipFile path.
+- **bb-bundled ports.** `clojure.spec`, `rewrite-clj`, `edamame` and the
+  `clojure.data.xml` family are bb-bundled ports injected by reference;
+  Jolt has no bundled copies, so extensions needing them must declare a
+  Maven/git dep there.
 
 ## Runtime lifecycle
 

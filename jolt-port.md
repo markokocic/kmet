@@ -213,24 +213,59 @@ methods: `.indexOf`, `.getBytes`, java.time chains), and loaded libraries do
 too (cljfmt 0.16.5: `java.io.File` in 3 of its 12 sources). No `.-field`
 access anywhere in the corpus (0 hits).
 
-Remaining port items: (a) **the `sci/binding` wrapper** — vanilla SCI wants
-`sci/binding [sci/ns …]` around the eval loop for an `(ns …)` form; bb
-tolerates the unwrapped host-`*ns*`-only shape `eval-source!` uses today, Jolt
-throws `Can't change/establish root binding of #'clojure.core/*ns* with set`
-(`sci.lang/throw-root-binding`). kmet-side, and `#?(:jolt …)`-conditional:
-bb's own `sci/binding` is broken (`Unable to resolve symbol:
-sci.impl.vars/push-thread-bindings`); (b) the class/import tables
-(`context-classes` is bb's `babashka.classes/all-classes` today; jolt exposes
-no class enumeration — an upstream listing API or a curated table — the
-reflector path needs the table populated to reach any class); (c) the
-bb-bundled-lib redirection tables (`bundled-port-namespaces`,
-`bb-shared-namespaces`, rewrite-clj/edamame, `bb-imports`); (d) jar/zip
-extension artifacts (M5); (e) SCI-perf beyond one small extension. Alternative
-designs worth costing: (1) extensions as plain Jolt namespaces, no isolation
-(loses version isolation); (2) extensions as subprocesses over JSON-RPC (the
-MCP pattern — strong isolation, new protocol work); (3) SCI as now. This is
-the last milestone either way — the core agent must work before extensions
-matter.
+**LANDED (2026-09, unified loader).** The extension runtime now runs on both
+hosts with ONE implementation in `src/kmet/app/extensions.cljc` — no
+`:jolt`-specific loader build, no feature stubs. What changed:
+
+- **(a) the `sci/binding` wrapper — resolved by not needing it.** `eval-source!`
+  now evaluates a whole source with `sci/eval-string*` (SCI binds its own
+  `current-ns` per form), so `(ns … (:import …))` works on both hosts; the old
+  host-`read`+`eval-form` loop is gone (bb's own `sci/binding` is broken, so a
+  shared wrapper was never possible). `:features` is the only per-host option,
+  a runtime value: `#{:jolt :clj}` vs `#{:bb :clj}` (never merged — a reader
+  takes the first matching branch).
+- **(b) the class/import tables — replaced by lazy host delegation.**
+  `babashka.classes/all-classes` (no Jolt equivalent) is gone. `{:classes
+  {:allow :all}}` delegates instance calls to the host, and statics/ctors/type
+  hints register through `bb-imports` + `Class/forName` + a miss-retry loop
+  (short hints registered under both the short and FQ symbol, since hint
+  resolution reads `class->opts` by the short name). One residual Jolt gap:
+  classes Jolt's class graph does not supply (e.g. a `^StringBuilder` hint)
+  fail the load there — jolt's own RFC 0014 message; tracked separately, not
+  loader work.
+- **(c) bb-bundled redirection tables — host-gated.** The bb ports
+  (`clojure.spec`, `rewrite-clj`, `edamame`, `data.xml`) are required and
+  injected only on bb (`host-requires!`); Jolt has no bundled copies, so those
+  namespaces stay absent from its contexts and a requiring extension gets the
+  actionable load-fn error. The shared `kmet.tui.*` / `kmet.libs.*` layers are
+  injected on both hosts via `shared-var-map`, which `sci/copy-var*`s each
+  intern into a `sci.lang.Var` (host Vars cannot cross into a SCI context:
+  `No method isMacro`).
+- **(d) jar/zip artifacts — materialized on Jolt.** `unzip` into a temp cache
+  keyed by path + mtime, then treated as a directory artifact (code,
+  `extension.edn`, `deps.edn` and `io/resource` all use plain fs). bb keeps the
+  unexpanded ZipFile path (jar-ext.md §1). Verified on Jolt: own namespaces,
+  bundled resources, `.zip` suffix and container discovery.
+- **(e) per-extension deps — Jolt path added.** `jolt.deps/resolve-deps`
+  (AOT'd into the binary) yields extracted source ROOTS; the load-fn and the
+  io/resource shadow probe directories on Jolt and jars on bb (`dep-source`).
+  Verified on Jolt with an extension declaring `org.clojure/tools.cli` (closure
+  recorded as a root, tool runs, unload releases it). SCI pin: `org.babashka/sci`
+  0.13.53, declared in `jolt/deps.edn` (the jolt-only slot) so the shared
+  deps.edn stays free of a host-bundled library.
+- **Core load/unload coverage on Jolt**: the whole loader test set runs there
+  (single-file, manifest dir with an internal ns through the load-fn, symlinked
+  root, unload/reload with no duplicates, rollback on failure, resource
+  fallback, self-registered skills/prompts, ctx dispatch, isolation allowlist).
+  The shipped-extension test stays bb-only for extension CONTENT reasons
+  (deps closures and the Jolt class-graph gap above).
+  Lazy-`mapcat` fix worth noting: `reload-extensions!` returned an unrealized
+  `mapcat`, so a caller ignoring the value loaded nothing on Jolt (bb's
+  `apply`/`concat` realized it) — now `vec`-forced.
+
+The remaining Jolt work is therefore no longer loader design: it is the
+class-graph gap (upstream) and the bb-port gaps (per-extension deps), plus
+SCI-perf beyond one small extension (the 45/23/5 ms smoke).
 
 ---
 
